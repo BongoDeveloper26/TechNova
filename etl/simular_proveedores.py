@@ -122,16 +122,12 @@ def escribir_csv(ruta, filas, contrato):
             escritor.writerow(fila[c] for c in inverso)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Simula los CSV diarios de los proveedores")
-    parser.add_argument("--desde", type=date.fromisoformat, default=date.today())
-    parser.add_argument("--hasta", type=date.fromisoformat, default=date.today())
-    args = parser.parse_args()
-
+def simular(desde: date, hasta: date) -> int:
+    """Genera los ficheros de todos los proveedores entre dos fechas. Devuelve cuántos ha creado."""
     catalogo = cargar_catalogo()
     total = 0
-    dia = args.desde
-    while dia <= args.hasta:
+    dia = desde
+    while dia <= hasta:
         if dia.weekday() != 6:  # los domingos no se envía nada
             for codigo, contrato in CONTRATOS_PROVEEDOR.items():
                 rng = random.Random(f"{dia}-{codigo}")  # reproducible: mismo día -> mismo fichero
@@ -139,6 +135,16 @@ def main():
                 escribir_csv(CARPETA_LANDING / dia.isoformat() / f"{codigo}.csv", filas, contrato)
                 total += 1
         dia += timedelta(days=1)
+    return total
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Simula los CSV diarios de los proveedores")
+    parser.add_argument("--desde", type=date.fromisoformat, default=date.today())
+    parser.add_argument("--hasta", type=date.fromisoformat, default=date.today())
+    args = parser.parse_args()
+
+    total = simular(args.desde, args.hasta)
     print(f"{total} ficheros generados en {CARPETA_LANDING.relative_to(RAIZ).as_posix()}/")
 
 

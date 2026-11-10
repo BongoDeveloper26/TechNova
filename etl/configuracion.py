@@ -7,6 +7,7 @@ Aquí está TODO lo que puede cambiar sin tocar la lógica:
   - El "contrato de datos" de cada proveedor (cómo es su CSV)
   - Umbrales de calidad
 """
+import os
 from datetime import date
 from pathlib import Path
 
@@ -55,7 +56,8 @@ ESTRATEGIAS_OLTP = {
 # ---------------------------------------------------------------------
 # 2. API DE TIPOS DE CAMBIO (Frankfurter v2, datos oficiales del BCE)
 # ---------------------------------------------------------------------
-API_DIVISAS_URL = "https://api.frankfurter.dev/v2/rates"
+# Se puede cambiar con una variable de entorno (p. ej. para apuntar a una API de pruebas)
+API_DIVISAS_URL = os.getenv("API_DIVISAS_URL", "https://api.frankfurter.dev/v2/rates")
 API_DIVISAS_PROVEEDOR = "ECB"              # Banco Central Europeo
 MONEDAS = ["USD", "JPY", "GBP"]
 DIVISAS_DESDE = date(2022, 12, 1)          # primera carga: cubre todas las compras

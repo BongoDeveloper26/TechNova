@@ -5,6 +5,9 @@ Todo lo que hace el ETL queda apuntado en dos sitios:
   1. Un log de texto (logs/etl.log) para leerlo a mano.
   2. Las tablas etl.ejecucion y etl.paso, para consultarlo con SQL
      ("¿cuántas filas se rechazaron ayer?", "¿qué paso falló?").
+
+Una ejecución puede abrirse en un proceso y continuarse en otros:
+Airflow lanza cada paso en un proceso distinto y se pasan el id de la ejecución.
 """
 import json
 import logging
@@ -53,16 +56,26 @@ class ResultadoPaso:
 class Ejecucion:
     """Representa una ejecución completa del ETL (una fila en etl.ejecucion)."""
 
-    def __init__(self, conn_dw, fecha_proceso, parametros):
+    def __init__(self, conn_dw, id_ejecucion):
+        """Retoma una ejecución que ya existe (la abrió otro proceso o esta misma)."""
+        fila = conn_dw.execute(
+            "SELECT fecha_proceso FROM etl.ejecucion WHERE id_ejecucion = %s", (id_ejecucion,)
+        ).fetchone()
+        if fila is None:
+            raise ValueError(f"No existe la ejecución {id_ejecucion}")
         self.conn = conn_dw
-        self.fecha_proceso = fecha_proceso
-        self.estado = "ok"
-        self.id = conn_dw.execute(
+        self.id = id_ejecucion
+        self.fecha_proceso = fila[0]
+
+    @classmethod
+    def nueva(cls, conn_dw, fecha_proceso, parametros):
+        id_ejecucion = conn_dw.execute(
             "INSERT INTO etl.ejecucion (fecha_proceso, parametros) VALUES (%s, %s) RETURNING id_ejecucion",
             (fecha_proceso, json.dumps(parametros, default=str)),
         ).fetchone()[0]
         conn_dw.commit()
-        log.info(f"===== Ejecución #{self.id} | fecha de proceso {fecha_proceso} =====")
+        log.info(f"===== Ejecución #{id_ejecucion} | fecha de proceso {fecha_proceso} =====")
+        return cls(conn_dw, id_ejecucion)
 
     @contextmanager
     def paso(self, nombre):
@@ -72,8 +85,8 @@ class Ejecucion:
                 ...
                 r.cargadas = 100
 
-        Si dentro hay una excepción, se deshace lo que hiciera el paso (rollback),
-        se apunta el error y la ejecución sigue con el siguiente paso.
+        Si dentro hay una excepción, se deshace lo que hiciera el paso (rollback)
+        y se apunta el error. Quien llama decide si continuar o parar.
         """
         id_paso = self.conn.execute(
             "INSERT INTO etl.paso (id_ejecucion, nombre) VALUES (%s, %s) RETURNING id_paso",
@@ -103,13 +116,25 @@ class Ejecucion:
         self.conn.commit()
         log.info(f"   {resultado.estado.upper()} | leídas {resultado.leidas} | cargadas {resultado.cargadas}"
                  f" | rechazadas {resultado.rechazadas} | {segundos:.1f} s")
-        if ORDEN_ESTADOS[resultado.estado] > ORDEN_ESTADOS[self.estado]:
-            self.estado = resultado.estado
 
-    def cerrar(self):
+    def cerrar(self) -> str:
+        """
+        El estado final es el PEOR estado del último intento de cada paso
+        (si un paso falló y Airflow lo reintentó con éxito, cuenta el éxito).
+        """
+        estados = [fila[0] for fila in self.conn.execute(
+            """SELECT DISTINCT ON (nombre) estado
+               FROM etl.paso WHERE id_ejecucion = %s
+               ORDER BY nombre, id_paso DESC""",
+            (self.id,),
+        ).fetchall()]
+        estado = max(estados, key=ORDEN_ESTADOS.get, default="ok")
+        if estado == "en_curso":
+            estado = "error"
         self.conn.execute(
             "UPDATE etl.ejecucion SET fin = now(), estado = %s WHERE id_ejecucion = %s",
-            (self.estado, self.id),
+            (estado, self.id),
         )
         self.conn.commit()
-        log.info(f"===== Ejecución #{self.id} terminada: {self.estado.upper()} =====")
+        log.info(f"===== Ejecución #{self.id} terminada: {estado.upper()} =====")
+        return estado

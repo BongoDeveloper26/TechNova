@@ -36,7 +36,7 @@ flowchart LR
 | Infraestructura | Docker · Docker Compose |
 | Generación de datos | Python · Faker · psycopg 3 |
 | ETL | Python · pandas · requests · API REST |
-| Orquestación | Apache Airflow *(Fase 4)* |
+| Orquestación | Apache Airflow 3.3 |
 | Transformación | dbt *(Fase 5)* |
 | Visualización | Metabase *(Fase 6)* |
 | Machine Learning | scikit-learn *(Fase 7)* |
@@ -227,9 +227,41 @@ Tras la carga se ejecutan 10 controles. Los de severidad `error` hacen fallar la
 
 ---
 
+## Orquestación con Airflow
+
+El ETL se ejecuta automáticamente cada noche con **Apache Airflow 3.3**, que corre en su propio contenedor junto a PostgreSQL y pgAdmin.
+
+```mermaid
+flowchart LR
+    F[fecha_proceso] --> S[simular_ficheros] --> A[abrir_ejecucion]
+    A --> O[extraer_oltp]
+    A --> D[divisas]
+    O --> P[proveedores]
+    D --> P
+    P --> C[calidad] --> Z[cerrar_ejecucion]
+```
+
+| Decisión | Motivo |
+|---|---|
+| Programado a las 03:00 (`0 3 * * *`), procesa el día anterior | El día ya está completo y no compite con las ventas |
+| `extraer_oltp` y `divisas` en paralelo | No dependen la una de la otra |
+| `proveedores` espera a las dos | Necesita el catálogo y los tipos de cambio |
+| 2 reintentos con 2 minutos de espera | Absorbe fallos temporales (API caída, red) |
+| `calidad` sin reintentos | Reintentar no arregla datos incorrectos |
+| `cerrar_ejecucion` con `trigger_rule=ALL_DONE` | Se ejecuta siempre y deja la ejecución cerrada en `etl.ejecucion` con su estado real |
+| `max_active_runs=1` | Dos cargas a la vez podrían pisarse |
+| Importaciones del ETL dentro de las tareas | Airflow lee el DAG cada pocos segundos; así esa lectura es instantánea |
+| Parámetro `fecha` | Permite reprocesar un día concreto desde la web |
+
+Cada tarea pasa el identificador de la ejecución a la siguiente mediante **XCom**, de modo que todos los pasos de una noche quedan agrupados en una sola fila de `etl.ejecucion`.
+
+El DAG se ha probado con ejecuciones correctas, con un fallo de calidad forzado (stock negativo) y con la API de divisas caída: en los dos últimos casos las tareas dependientes no se ejecutan, la ejecución queda en `error` y el DAG en rojo.
+
+---
+
 ## Puesta en marcha
 
-**Requisitos:** Docker Desktop y Python 3.10+
+**Requisitos:** Docker Desktop (con al menos 4 GB de memoria asignada) y Python 3.10+
 
 ```bash
 # 1. Clonar y configurar
@@ -249,15 +281,18 @@ python data_generator/main.py
 # 4. (Opcional) Medir el efecto de los índices
 python benchmarks/benchmark_indices.py
 
-# 5. Simular los ficheros de los proveedores y lanzar el ETL
+# 5. Simular los ficheros de los proveedores y lanzar el ETL a mano
 python etl/simular_proveedores.py --desde 2025-12-01 --hasta 2025-12-31
 python etl/run_etl.py --fecha 2025-12-31
 ```
+
+El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera vez tarda unos minutos en construir su imagen. Al entrar en la web, hay que activar el DAG `technova_etl` (los DAG nuevos empiezan en pausa).
 
 | Servicio | URL |
 |---|---|
 | PostgreSQL | `localhost:5432` |
 | pgAdmin | http://localhost:5050 |
+| Airflow | http://localhost:8080 |
 
 ---
 
@@ -265,8 +300,14 @@ python etl/run_etl.py --fecha 2025-12-31
 
 ```
 technova-data-platform/
-├── docker-compose.yml
+├── docker-compose.yml          # PostgreSQL, pgAdmin y Airflow
 ├── requirements.txt
+├── airflow/
+│   ├── Dockerfile              # imagen oficial + librerías del ETL
+│   ├── requirements-airflow.txt
+│   ├── arrancar.sh             # crea la base de datos de Airflow y lo arranca
+│   └── dags/
+│       └── technova_etl.py     # DAG diario del ETL
 ├── sql/
 │   ├── init/                   # se ejecutan solos al crear la base de datos OLTP
 │   │   ├── 01_schema.sql       # esquema OLTP (22 tablas)
@@ -314,7 +355,7 @@ technova-data-platform/
 - [x] **Fase 2** — Generador de datos realistas
 - [x] **Fase 3** — SQL avanzado, índices y optimización
 - [x] **Fase 4a** — ETL multi-fuente con validación y controles de calidad
-- [ ] **Fase 4b** — Orquestación con Airflow
+- [x] **Fase 4b** — Orquestación con Airflow
 - [ ] **Fase 5** — Data warehouse en estrella con dbt
 - [ ] **Fase 6** — Dashboard de negocio
 - [ ] **Fase 7** — Machine Learning

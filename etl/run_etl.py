@@ -1,52 +1,91 @@
 """
-run_etl.py -> Lanza el ETL completo.
+run_etl.py -> Lanza el ETL.
 
-Uso (desde la raíz del proyecto):
+Se puede usar de dos formas:
+
+1) A mano, desde la terminal (todo seguido):
     python etl/run_etl.py                          # fecha de proceso = hoy
     python etl/run_etl.py --fecha 2025-12-31       # procesar un día concreto
     python etl/run_etl.py --pasos divisas,calidad  # solo algunos pasos
 
-Orden de los pasos (cada uno necesita el anterior):
-    oltp -> divisas -> proveedores -> calidad
-           (los proveedores necesitan el catálogo y los tipos de cambio)
+2) Desde Airflow, paso a paso (cada paso en una tarea distinta):
+    id = abrir_ejecucion(fecha)
+    ejecutar_paso(id, "oltp")      ...
+    cerrar_ejecucion(id)
 
-Código de salida: 0 si todo va bien o con avisos, 1 si hay errores
-(así Airflow, o cualquier otro orquestador, sabe que algo ha fallado).
+Orden de los pasos:
+    oltp ──┐
+           ├──> proveedores ──> calidad
+    divisas┘
+    (los proveedores necesitan el catálogo y los tipos de cambio)
+
+Código de salida: 0 si todo va bien o con avisos, 1 si hay errores.
 """
 import argparse
 import sys
 from datetime import date
 
-import calidad
-import divisas
-import extraer_oltp
-import proveedores
 from conexiones import conectar_dw, conectar_oltp, preparar_dw
 from registro import Ejecucion, log
 
 PASOS = ["oltp", "divisas", "proveedores", "calidad"]
 
+NOMBRES = {
+    "oltp": "Extraer OLTP -> staging",
+    "divisas": "API tipos de cambio -> staging",
+    "proveedores": "CSV proveedores -> staging",
+    "calidad": "Controles de calidad",
+}
+
+
+class PasoFallido(RuntimeError):
+    """Se lanza cuando un paso termina en error (para que Airflow lo marque en rojo y reintente)."""
+
+
+def abrir_ejecucion(fecha_proceso: date, parametros=None) -> int:
+    preparar_dw()
+    with conectar_dw() as conn_dw:
+        return Ejecucion.nueva(conn_dw, fecha_proceso, parametros or {}).id
+
+
+def ejecutar_paso(id_ejecucion: int, paso: str, lanzar_si_falla: bool = True) -> str:
+    # Los módulos se importan aquí dentro: cada paso solo carga lo que necesita
+    import calidad
+    import divisas
+    import extraer_oltp
+    import proveedores
+
+    with conectar_oltp() as conn_oltp, conectar_dw() as conn_dw:
+        ejecucion = Ejecucion(conn_dw, id_ejecucion)
+        fecha = ejecucion.fecha_proceso
+        with ejecucion.paso(NOMBRES[paso]) as r:
+            if paso == "oltp":
+                extraer_oltp.ejecutar(conn_oltp, conn_dw, r)
+            elif paso == "divisas":
+                divisas.ejecutar(conn_dw, fecha, r)
+            elif paso == "proveedores":
+                proveedores.ejecutar(conn_dw, ejecucion.id, fecha, r)
+            elif paso == "calidad":
+                calidad.ejecutar(conn_oltp, conn_dw, ejecucion.id, fecha, r)
+            else:
+                raise ValueError(f"Paso desconocido: {paso}")
+
+    if r.estado == "error" and lanzar_si_falla:
+        raise PasoFallido(f"El paso '{paso}' ha fallado: {' | '.join(r.detalle)}")
+    return r.estado
+
+
+def cerrar_ejecucion(id_ejecucion: int) -> str:
+    with conectar_dw() as conn_dw:
+        return Ejecucion(conn_dw, id_ejecucion).cerrar()
+
 
 def ejecutar_etl(fecha_proceso: date, pasos=PASOS) -> str:
-    preparar_dw()
-    with conectar_oltp() as conn_oltp, conectar_dw() as conn_dw:
-        ejecucion = Ejecucion(conn_dw, fecha_proceso, {"pasos": pasos})
-
-        if "oltp" in pasos:
-            with ejecucion.paso("Extraer OLTP -> staging") as r:
-                extraer_oltp.ejecutar(conn_oltp, conn_dw, r)
-        if "divisas" in pasos:
-            with ejecucion.paso("API tipos de cambio -> staging") as r:
-                divisas.ejecutar(conn_dw, fecha_proceso, r)
-        if "proveedores" in pasos:
-            with ejecucion.paso("CSV proveedores -> staging") as r:
-                proveedores.ejecutar(conn_dw, ejecucion.id, fecha_proceso, r)
-        if "calidad" in pasos:
-            with ejecucion.paso("Controles de calidad") as r:
-                calidad.ejecutar(conn_oltp, conn_dw, ejecucion.id, fecha_proceso, r)
-
-        ejecucion.cerrar()
-        return ejecucion.estado
+    """Todo seguido. Si un paso falla, se apunta y se sigue con los demás."""
+    id_ejecucion = abrir_ejecucion(fecha_proceso, {"pasos": pasos, "origen": "terminal"})
+    for paso in pasos:
+        ejecutar_paso(id_ejecucion, paso, lanzar_si_falla=False)
+    return cerrar_ejecucion(id_ejecucion)
 
 
 def main():

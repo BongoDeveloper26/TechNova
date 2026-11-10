@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:17
     container_name: technova_db
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -11,10 +12,18 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql/init:/docker-entrypoint-initdb.d
+    # Comprueba cada 5 s que PostgreSQL acepta conexiones.
+    # Airflow no arranca hasta que esto dé "healthy".
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   pgadmin:
     image: dpage/pgadmin4
     container_name: technova_pgadmin
+    restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
@@ -25,6 +34,43 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
 
+  airflow:
+    build: ./airflow
+    image: technova-airflow:3.3.2
+    container_name: technova_airflow
+    restart: unless-stopped
+    command: ["bash", "/opt/airflow/arrancar.sh"]
+    env_file: .env
+    environment:
+      # Dentro de Docker, PostgreSQL se llama "postgres" (no "localhost")
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      # Para que los DAGs encuentren los módulos del ETL
+      PYTHONPATH: /opt/technova/etl
+      # La imagen oficial comprueba la base de datos de Airflow ANTES de lanzar nuestro script,
+      # pero esa base de datos la crea precisamente nuestro script. Desactivamos esa comprobación:
+      # ya esperamos a PostgreSQL con el healthcheck y depends_on
+      CONNECTION_CHECK_MAX_COUNT: "0"
+      # Configuración de Airflow: AIRFLOW__<SECCION>__<CLAVE>
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__DEFAULT_TIMEZONE: Europe/Madrid
+      # Solo para desarrollo en local: entra en la web sin usuario ni contraseña
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./etl:/opt/technova/etl
+      - ./data_generator:/opt/technova/data_generator
+      - ./sql:/opt/technova/sql
+      - ./data:/opt/technova/data
+      - ./logs:/opt/technova/logs
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
-  pgadmin_data: 
+  pgadmin_data:
