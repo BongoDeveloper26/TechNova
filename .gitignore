@@ -5,3 +5,6 @@ __pycache__/
 .vscode/
 data/
 logs/
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/

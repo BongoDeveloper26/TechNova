@@ -51,6 +51,8 @@ services:
       # pero esa base de datos la crea precisamente nuestro script. Desactivamos esa comprobación:
       # ya esperamos a PostgreSQL con el healthcheck y depends_on
       CONNECTION_CHECK_MAX_COUNT: "0"
+      # dbt está instalado en su propio entorno de Python dentro de la imagen
+      DBT_BIN: /opt/dbt_venv/bin/dbt
       # Configuración de Airflow: AIRFLOW__<SECCION>__<CLAVE>
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
@@ -63,6 +65,7 @@ services:
       - ./etl:/opt/technova/etl
       - ./data_generator:/opt/technova/data_generator
       - ./sql:/opt/technova/sql
+      - ./dbt:/opt/technova/dbt
       - ./data:/opt/technova/data
       - ./logs:/opt/technova/logs
     ports:

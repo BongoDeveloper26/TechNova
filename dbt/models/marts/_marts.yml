@@ -1,0 +1,149 @@
+models:
+  # ------------------------------------------------------------------ DIMENSIONES
+  - name: dim_fecha
+    description: Calendario con festivos nacionales, campañas de descuento y Black Friday
+    columns:
+      - name: id_fecha
+        description: Fecha en formato AAAAMMDD (clave de la dimensión)
+        data_tests: [unique, not_null]
+      - name: es_black_friday
+        description: Verdadero solo el día de Black Friday (no toda la Black Week)
+
+  - name: dim_producto
+    description: Producto con su categoría, subcategoría, marca y margen
+    columns:
+      - name: id_producto
+        data_tests: [unique, not_null]
+      - name: sku
+        data_tests: [unique, not_null]
+      - name: margen_unitario
+        data_tests: [no_negativo]
+
+  - name: dim_cliente
+    description: Situación actual de cada cliente, con su nivel de fidelidad y su segmento RFM
+    columns:
+      - name: id_cliente
+        data_tests: [unique, not_null]
+      - name: segmento_rfm
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["Campeones", "Leales", "Nuevos", "En riesgo", "Perdidos", "Potenciales", "Sin compras"]
+
+  - name: dim_ubicacion
+    description: Tiendas y almacenes
+    columns:
+      - name: id_ubicacion
+        data_tests: [unique, not_null]
+      - name: tipo
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["tienda", "almacen"]
+
+  - name: dim_empleado
+    description: Empleados con su ubicación y su jefe
+    columns:
+      - name: id_empleado
+        data_tests: [unique, not_null]
+
+  - name: dim_proveedor
+    columns:
+      - name: id_proveedor
+        data_tests: [unique, not_null]
+
+  # ------------------------------------------------------------------ HECHOS
+  - name: fct_ventas
+    description: >
+      Una fila por línea de pedido no cancelado. Modelo incremental: cada noche
+      recalcula los últimos días para recoger devoluciones nuevas.
+    columns:
+      - name: id_linea
+        data_tests: [unique, not_null]
+      - name: id_fecha
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_fecha')
+                field: id_fecha
+      - name: id_producto
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_producto')
+                field: id_producto
+      - name: id_cliente
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_cliente')
+                field: id_cliente
+      - name: id_ubicacion
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_ubicacion')
+                field: id_ubicacion
+      - name: id_empleado
+        description: Vacío en las ventas web
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_empleado')
+                field: id_empleado
+      - name: canal
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["web", "tienda"]
+      - name: importe_neto
+        description: Importe de la línea después de descuentos
+        data_tests: [not_null, no_negativo]
+      - name: importe_neto_final
+        description: Importe neto menos lo devuelto (lo que de verdad se queda la empresa)
+
+  - name: fct_pedidos
+    description: Una fila por pedido, con su pago y su envío
+    columns:
+      - name: id_pedido
+        data_tests: [unique, not_null]
+      - name: id_cliente
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_cliente')
+                field: id_cliente
+
+  - name: fct_tarifas_proveedor
+    description: Precio diario de cada proveedor por producto, convertido a euros
+    data_tests:
+      - unique_combinacion:
+          arguments:
+            columnas: ["fecha_tarifa", "id_proveedor", "id_producto"]
+    columns:
+      - name: id_proveedor
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_proveedor')
+                field: id_proveedor
+      - name: precio_coste_eur
+        data_tests: [not_null, no_negativo]
+
+  - name: fct_stock
+    description: Foto del stock por producto y ubicación con su nivel de alerta
+    data_tests:
+      - unique_combinacion:
+          arguments:
+            columnas: ["id_producto", "id_ubicacion"]
+    columns:
+      - name: cantidad
+        data_tests: [no_negativo]
+      - name: nivel_alerta
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["ROTURA", "CRITICO", "BAJO", "OK"]

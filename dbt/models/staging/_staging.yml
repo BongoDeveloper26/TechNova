@@ -1,0 +1,29 @@
+models:
+  - name: stg_clientes
+    description: Clientes con el email en minúsculas y el nombre completo
+    columns:
+      - name: id_cliente
+        data_tests: [unique, not_null]
+  - name: stg_productos
+    columns:
+      - name: id_producto
+        data_tests: [unique, not_null]
+      - name: sku
+        data_tests: [unique, not_null]
+  - name: stg_pedidos
+    columns:
+      - name: id_pedido
+        data_tests: [unique, not_null]
+      - name: canal
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["web", "tienda"]
+  - name: stg_lineas_pedido
+    columns:
+      - name: id_linea
+        data_tests: [unique, not_null]
+  - name: stg_tipos_cambio
+    columns:
+      - name: tasa
+        data_tests: [not_null]

@@ -15,9 +15,10 @@ Se puede usar de dos formas:
 
 Orden de los pasos:
     oltp ──┐
-           ├──> proveedores ──> calidad
+           ├──> proveedores ──> calidad ──> dbt
     divisas┘
-    (los proveedores necesitan el catálogo y los tipos de cambio)
+    (los proveedores necesitan el catálogo y los tipos de cambio;
+     dbt solo debe ejecutarse si la calidad está bien)
 
 Código de salida: 0 si todo va bien o con avisos, 1 si hay errores.
 """
@@ -28,13 +29,14 @@ from datetime import date
 from conexiones import conectar_dw, conectar_oltp, preparar_dw
 from registro import Ejecucion, log
 
-PASOS = ["oltp", "divisas", "proveedores", "calidad"]
+PASOS = ["oltp", "divisas", "proveedores", "calidad", "dbt"]
 
 NOMBRES = {
     "oltp": "Extraer OLTP -> staging",
     "divisas": "API tipos de cambio -> staging",
     "proveedores": "CSV proveedores -> staging",
     "calidad": "Controles de calidad",
+    "dbt": "dbt build -> data warehouse",
 }
 
 
@@ -54,6 +56,7 @@ def ejecutar_paso(id_ejecucion: int, paso: str, lanzar_si_falla: bool = True) ->
     import divisas
     import extraer_oltp
     import proveedores
+    import transformar_dbt
 
     with conectar_oltp() as conn_oltp, conectar_dw() as conn_dw:
         ejecucion = Ejecucion(conn_dw, id_ejecucion)
@@ -67,6 +70,8 @@ def ejecutar_paso(id_ejecucion: int, paso: str, lanzar_si_falla: bool = True) ->
                 proveedores.ejecutar(conn_dw, ejecucion.id, fecha, r)
             elif paso == "calidad":
                 calidad.ejecutar(conn_oltp, conn_dw, ejecucion.id, fecha, r)
+            elif paso == "dbt":
+                transformar_dbt.ejecutar(r)
             else:
                 raise ValueError(f"Paso desconocido: {paso}")
 
@@ -81,10 +86,17 @@ def cerrar_ejecucion(id_ejecucion: int) -> str:
 
 
 def ejecutar_etl(fecha_proceso: date, pasos=PASOS) -> str:
-    """Todo seguido. Si un paso falla, se apunta y se sigue con los demás."""
+    """
+    Todo seguido. Si un paso falla, se apunta y se sigue con los demás,
+    salvo dbt: si la calidad ha fallado, no se transforman datos incorrectos.
+    """
     id_ejecucion = abrir_ejecucion(fecha_proceso, {"pasos": pasos, "origen": "terminal"})
+    estados = {}
     for paso in pasos:
-        ejecutar_paso(id_ejecucion, paso, lanzar_si_falla=False)
+        if paso == "dbt" and estados.get("calidad") == "error":
+            log.error("-> dbt NO se ejecuta porque los controles de calidad han fallado")
+            continue
+        estados[paso] = ejecutar_paso(id_ejecucion, paso, lanzar_si_falla=False)
     return cerrar_ejecucion(id_ejecucion)
 
 

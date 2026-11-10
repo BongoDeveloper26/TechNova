@@ -1,0 +1,5 @@
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+Faker>=30.0
+pandas
+requests

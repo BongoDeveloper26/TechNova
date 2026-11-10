@@ -1,0 +1,38 @@
+# Proyecto dbt de TechNova: transforma staging (lo que carga el ETL) en un esquema en estrella
+name: technova
+version: "1.0.0"
+profile: technova
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+clean-targets: ["target", "dbt_packages"]
+
+# Variables que se pueden cambiar sin tocar los modelos
+vars:
+  fecha_inicio_calendario: "2022-01-01"
+  fecha_fin_calendario: "2026-12-31"
+  dias_reproceso: 60   # fct_ventas vuelve a calcular los últimos N días (por si llegan devoluciones)
+
+# Cada capa va a su propio esquema y con su propia materialización
+models:
+  technova:
+    staging:
+      +schema: stg
+      +materialized: view        # vistas: no ocupan espacio, siempre al día
+    intermediate:
+      +schema: int
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table       # tablas: rápidas para el dashboard
+
+seeds:
+  technova:
+    +schema: seeds
+
+snapshots:
+  technova:
+    +schema: snapshots

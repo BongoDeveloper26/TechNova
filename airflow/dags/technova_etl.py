@@ -3,12 +3,13 @@ DAG technova_etl -> Ejecuta el ETL de TechNova todas las noches.
 
 Un DAG (Directed Acyclic Graph) es la lista de tareas y el ORDEN en que se ejecutan:
 
-    fecha_proceso ─> simular_ficheros ─> abrir_ejecucion ─┬─> extraer_oltp ──┐
-                                                           │                  ├─> proveedores ─> calidad ─> cerrar_ejecucion
-                                                           └─> divisas ───────┘
+    fecha_proceso ─> simular_ficheros ─> abrir_ejecucion ─┬─> extraer_oltp ─┐
+                                                           │                 ├─> proveedores ─> calidad ─> dbt ─> cerrar_ejecucion
+                                                           └─> divisas ──────┘
 
   - extraer_oltp y divisas no dependen la una de la otra: Airflow las lanza A LA VEZ.
   - proveedores espera a las dos (necesita el catálogo y los tipos de cambio).
+  - dbt solo se ejecuta si calidad ha ido bien: no se transforman datos incorrectos.
   - cerrar_ejecucion se ejecuta SIEMPRE (trigger_rule=ALL_DONE), aunque algo falle,
     para que la ejecución quede cerrada en etl.ejecucion con su estado real.
 
@@ -32,13 +33,13 @@ ARGUMENTOS_POR_DEFECTO = {
 
 @dag(
     dag_id="technova_etl",
-    description="ETL diario: OLTP + API de divisas + CSV de proveedores -> technova_dw",
+    description="ELT diario: OLTP + API de divisas + CSV de proveedores -> staging -> dbt -> marts",
     schedule="0 3 * * *",                 # cron: minuto 0, hora 3, todos los días
     start_date=datetime(2025, 12, 1),
     catchup=False,                        # no ejecutar automáticamente los días pasados
     max_active_runs=1,                    # nunca dos ejecuciones a la vez
     default_args=ARGUMENTOS_POR_DEFECTO,
-    tags=["technova", "etl"],
+    tags=["technova", "etl", "dbt"],
     doc_md=__doc__,
     params={
         "fecha": Param(
@@ -99,6 +100,12 @@ def technova_etl():
         from run_etl import ejecutar_paso
         return ejecutar_paso(id_ejecucion, "calidad")
 
+    @task(retries=1)
+    def transformar_dbt(id_ejecucion: int) -> str:
+        """dbt build: staging -> esquema en estrella (marts), con sus tests."""
+        from run_etl import ejecutar_paso
+        return ejecutar_paso(id_ejecucion, "dbt")
+
     @task(trigger_rule=TriggerRule.ALL_DONE, retries=0)
     def cerrar_ejecucion(id_ejecucion: int) -> str:
         from run_etl import cerrar_ejecucion as cerrar
@@ -120,7 +127,9 @@ def technova_etl():
     tarifas = proveedores(id_ejecucion)
     controles = calidad(id_ejecucion)
 
-    [oltp, tipos] >> tarifas >> controles >> cerrar_ejecucion(id_ejecucion)
+    modelo = transformar_dbt(id_ejecucion)
+
+    [oltp, tipos] >> tarifas >> controles >> modelo >> cerrar_ejecucion(id_ejecucion)
 
 
 technova_etl()

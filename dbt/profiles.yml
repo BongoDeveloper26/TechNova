@@ -1,0 +1,14 @@
+# Conexión de dbt a la base de datos analítica.
+# Los valores salen de variables de entorno (las del .env), nunca escritos aquí.
+technova:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | as_number }}"
+      user: "{{ env_var('POSTGRES_USER') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: "{{ env_var('DW_DB', 'technova_dw') }}"
+      schema: marts
+      threads: 4

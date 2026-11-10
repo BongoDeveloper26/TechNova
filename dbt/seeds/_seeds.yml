@@ -1,0 +1,13 @@
+seeds:
+  - name: festivos_nacionales
+    description: >
+      Festivos nacionales de España (sin los autonómicos ni locales).
+      Un "seed" es un CSV pequeño que dbt carga como tabla: ideal para datos
+      de referencia que casi nunca cambian.
+    config:
+      column_types:
+        fecha: date
+        festivo: varchar(60)
+    columns:
+      - name: fecha
+        data_tests: [unique, not_null]

@@ -1,0 +1,34 @@
+sources:
+  - name: staging
+    description: Tablas que carga el ETL (etl/run_etl.py) en technova_dw.staging
+    schema: staging
+    tables:
+      - name: oltp_cliente
+      - name: oltp_direccion
+      - name: oltp_ciudad
+      - name: oltp_nivel_fidelidad
+      - name: oltp_producto
+      - name: oltp_categoria
+      - name: oltp_marca
+      - name: oltp_ubicacion
+      - name: oltp_empleado
+      - name: oltp_proveedor
+      - name: oltp_pedido
+      - name: oltp_linea_pedido
+      - name: oltp_pago
+      - name: oltp_envio
+      - name: oltp_devolucion
+      - name: oltp_stock
+      - name: oltp_promocion
+      - name: tipo_cambio
+        description: Tipos de cambio diarios del BCE (unidades de moneda por 1 €)
+        config:
+          loaded_at_field: cargado_en
+          freshness:
+            warn_after: {count: 2, period: day}
+      - name: proveedor_tarifa
+        description: Tarifas diarias de los proveedores, ya validadas y en euros
+        config:
+          loaded_at_field: cargado_en
+          freshness:
+            warn_after: {count: 2, period: day}

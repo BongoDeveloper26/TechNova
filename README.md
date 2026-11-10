@@ -37,7 +37,7 @@ flowchart LR
 | Generación de datos | Python · Faker · psycopg 3 |
 | ETL | Python · pandas · requests · API REST |
 | Orquestación | Apache Airflow 3.3 |
-| Transformación | dbt *(Fase 5)* |
+| Transformación | dbt 1.11 (dbt-postgres) |
 | Visualización | Metabase *(Fase 6)* |
 | Machine Learning | scikit-learn *(Fase 7)* |
 
@@ -238,7 +238,7 @@ flowchart LR
     A --> D[divisas]
     O --> P[proveedores]
     D --> P
-    P --> C[calidad] --> Z[cerrar_ejecucion]
+    P --> C[calidad] --> T[transformar_dbt] --> Z[cerrar_ejecucion]
 ```
 
 | Decisión | Motivo |
@@ -248,6 +248,7 @@ flowchart LR
 | `proveedores` espera a las dos | Necesita el catálogo y los tipos de cambio |
 | 2 reintentos con 2 minutos de espera | Absorbe fallos temporales (API caída, red) |
 | `calidad` sin reintentos | Reintentar no arregla datos incorrectos |
+| `transformar_dbt` después de `calidad` | dbt solo transforma datos que han pasado los controles |
 | `cerrar_ejecucion` con `trigger_rule=ALL_DONE` | Se ejecuta siempre y deja la ejecución cerrada en `etl.ejecucion` con su estado real |
 | `max_active_runs=1` | Dos cargas a la vez podrían pisarse |
 | Importaciones del ETL dentro de las tareas | Airflow lee el DAG cada pocos segundos; así esa lectura es instantánea |
@@ -256,6 +257,80 @@ flowchart LR
 Cada tarea pasa el identificador de la ejecución a la siguiente mediante **XCom**, de modo que todos los pasos de una noche quedan agrupados en una sola fila de `etl.ejecucion`.
 
 El DAG se ha probado con ejecuciones correctas, con un fallo de calidad forzado (stock negativo) y con la API de divisas caída: en los dos últimos casos las tareas dependientes no se ejecutan, la ejecución queda en `error` y el DAG en rojo.
+
+---
+
+## Data warehouse con dbt
+
+`dbt/` transforma los datos de `staging` en un **esquema en estrella** dentro de `technova_dw`, con tests automáticos y documentación generada.
+
+```mermaid
+erDiagram
+    fct_ventas }o--|| dim_fecha : id_fecha
+    fct_ventas }o--|| dim_cliente : id_cliente
+    fct_ventas }o--|| dim_producto : id_producto
+    fct_ventas }o--|| dim_ubicacion : id_ubicacion
+    fct_ventas }o--o| dim_empleado : id_empleado
+    fct_tarifas_proveedor }o--|| dim_proveedor : id_proveedor
+    fct_tarifas_proveedor }o--|| dim_producto : id_producto
+    fct_stock }o--|| dim_producto : id_producto
+    fct_stock }o--|| dim_ubicacion : id_ubicacion
+```
+
+### Capas
+
+| Capa | Esquema | Materialización | Modelos |
+|---|---|---|---|
+| Staging | `stg` | Vista | 20 modelos `stg_`: nombres limpios y tipos, uno por tabla de origen |
+| Intermedia | `int` | Vista | `int_lineas_venta` (ventas con devoluciones), `int_clientes_rfm` (segmentación RFM) |
+| Marts | `marts` | Tabla | 6 dimensiones y 4 tablas de hechos |
+| Seeds | `seeds` | Tabla | `festivos_nacionales` (CSV de referencia) |
+| Snapshots | `snapshots` | Tabla | `snp_clientes`: historial de niveles de fidelidad |
+
+### Modelo en estrella
+
+| Tabla | Grano | Contenido |
+|---|---|---|
+| `fct_ventas` | Línea de pedido | Cantidad, importe bruto y neto, descuento, coste, margen, devoluciones |
+| `fct_pedidos` | Pedido | Totales, método de pago, pagos fallidos, transportista, horas hasta el envío, días hasta la entrega |
+| `fct_tarifas_proveedor` | Proveedor, producto y día | Precio en moneda original y en euros, desviación respecto al coste, stock y plazo |
+| `fct_stock` | Producto y ubicación | Cantidad, stock mínimo, nivel de alerta, valor del stock |
+| `dim_fecha` | Día | Calendario con festivos nacionales, campañas de descuento activas y Black Friday |
+| `dim_cliente` | Cliente | Ciudad, rango de edad, nivel de fidelidad y segmento RFM |
+| `dim_producto` | Producto | Categoría, subcategoría, marca, margen y rango de precio |
+| `dim_ubicacion`, `dim_empleado`, `dim_proveedor` | | Contexto de tiendas, vendedores y proveedores |
+
+### Técnicas utilizadas
+
+| Técnica | Dónde | Para qué |
+|---|---|---|
+| Modelo incremental | `fct_ventas` | Solo recalcula los últimos 60 días cada noche (unas 5.500 filas en vez de 28.000), suficiente para recoger devoluciones tardías |
+| Snapshot (SCD tipo 2) | `snp_clientes` | Guarda cada cambio de nivel de un cliente con su `dbt_valid_from` y `dbt_valid_to`, para saber en qué nivel estaba en cualquier fecha |
+| Seed | `festivos_nacionales` | Datos de referencia versionados en Git |
+| Calendario generado con SQL | `dim_fecha` | `generate_series` más festivos y campañas |
+| Macro de esquemas | `generate_schema_name` | Esquemas con nombres limpios (`stg`, `int`, `marts`) |
+| Variables | `dbt_project.yml` | Rango del calendario y días de reproceso configurables |
+
+### Tests
+
+56 tests que se ejecutan en cada `dbt build`:
+
+| Tipo | Ejemplos |
+|---|---|
+| Genéricos de dbt | `unique` y `not_null` en todas las claves, `relationships` de cada hecho con sus dimensiones, `accepted_values` en canales, segmentos y niveles de alerta |
+| Genéricos propios (macros) | `no_negativo` (importes, márgenes, stock), `unique_combinacion` (claves de varias columnas) |
+| Singulares | `assert_ventas_cuadran_con_staging` (reconciliación de importes) y `assert_devuelto_no_supera_vendido` |
+
+dbt se ejecuta como último paso del ETL y como tarea de Airflow, **solo si los controles de calidad han ido bien**: si un test falla, la ejecución queda en `error` con el nombre del test en `etl.paso`.
+
+### Documentación
+
+```bash
+python etl/transformar_dbt.py docs generate
+python etl/transformar_dbt.py docs serve --port 8081
+```
+
+Genera una web con la descripción de cada modelo y columna y el gráfico de linaje (de qué tabla sale cada tabla).
 
 ---
 
@@ -281,9 +356,13 @@ python data_generator/main.py
 # 4. (Opcional) Medir el efecto de los índices
 python benchmarks/benchmark_indices.py
 
-# 5. Simular los ficheros de los proveedores y lanzar el ETL a mano
+# 5. Simular los ficheros de los proveedores y lanzar el ETL a mano (incluye dbt)
 python etl/simular_proveedores.py --desde 2025-12-01 --hasta 2025-12-31
 python etl/run_etl.py --fecha 2025-12-31
+
+# 6. (Opcional) Documentación de dbt en http://localhost:8081
+python etl/transformar_dbt.py docs generate
+python etl/transformar_dbt.py docs serve --port 8081
 ```
 
 El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera vez tarda unos minutos en construir su imagen. Al entrar en la web, hay que activar el DAG `technova_etl` (los DAG nuevos empiezan en pausa).
@@ -337,10 +416,21 @@ technova-data-platform/
 │   ├── divisas.py              # API -> staging
 │   ├── proveedores.py          # CSV -> staging
 │   ├── calidad.py              # controles de calidad
+│   ├── transformar_dbt.py      # lanza dbt y resume sus resultados
 │   └── simular_proveedores.py  # genera los CSV (simula el exterior)
 ├── benchmarks/
 │   └── benchmark_indices.py
-├── dbt/                        # Fase 5
+├── dbt/
+│   ├── dbt_project.yml
+│   ├── profiles.yml            # conexión (lee las variables de entorno)
+│   ├── models/
+│   │   ├── staging/            # 20 modelos stg_ + fuentes
+│   │   ├── intermediate/       # int_lineas_venta, int_clientes_rfm
+│   │   └── marts/              # dim_ y fct_ + tests y documentación
+│   ├── snapshots/              # snp_clientes (SCD tipo 2)
+│   ├── seeds/                  # festivos_nacionales.csv
+│   ├── macros/                 # nombres de esquema y tests propios
+│   └── tests/                  # tests singulares
 ├── data/                       # ficheros de proveedores (no se sube a Git)
 ├── logs/                       # logs del ETL (no se sube a Git)
 └── docs/
@@ -356,6 +446,6 @@ technova-data-platform/
 - [x] **Fase 3** — SQL avanzado, índices y optimización
 - [x] **Fase 4a** — ETL multi-fuente con validación y controles de calidad
 - [x] **Fase 4b** — Orquestación con Airflow
-- [ ] **Fase 5** — Data warehouse en estrella con dbt
+- [x] **Fase 5** — Data warehouse en estrella con dbt
 - [ ] **Fase 6** — Dashboard de negocio
 - [ ] **Fase 7** — Machine Learning

@@ -13,6 +13,16 @@ from registro import log
 
 # (nombre, severidad, descripción, SQL que cuenta las filas incorrectas)
 CONTROLES = [
+    # Sin este control, unas tablas vacías pasarían todos los demás (nada que esté mal = todo ok)
+    ("tablas_clave_vacias", "error",
+     "Tablas imprescindibles que han llegado sin ninguna fila",
+     """SELECT (NOT EXISTS (SELECT 1 FROM staging.oltp_cliente))::int
+             + (NOT EXISTS (SELECT 1 FROM staging.oltp_producto))::int
+             + (NOT EXISTS (SELECT 1 FROM staging.oltp_pedido))::int
+             + (NOT EXISTS (SELECT 1 FROM staging.oltp_linea_pedido))::int
+             + (NOT EXISTS (SELECT 1 FROM staging.oltp_pago))::int
+             + (NOT EXISTS (SELECT 1 FROM staging.tipo_cambio))::int"""),
+
     ("lineas_sin_pedido", "error",
      "Líneas de pedido cuyo pedido no existe en staging (integridad referencial)",
      """SELECT COUNT(*) FROM staging.oltp_linea_pedido l

@@ -1,0 +1,12 @@
+snapshots:
+  - name: snp_clientes
+    description: >
+      Historial de cambios de nivel de fidelidad de cada cliente (SCD tipo 2).
+      Cada vez que se ejecuta, si un cliente ha cambiado de nivel, se cierra su
+      fila anterior (dbt_valid_to) y se abre una nueva (dbt_valid_from).
+      Así se puede saber en qué nivel estaba un cliente en cualquier fecha.
+    relation: ref('stg_clientes')
+    config:
+      unique_key: id_cliente
+      strategy: check
+      check_cols: ["id_nivel"]
