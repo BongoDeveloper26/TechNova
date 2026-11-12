@@ -32,3 +32,9 @@ sources:
           loaded_at_field: cargado_en
           freshness:
             warn_after: {count: 2, period: day}
+      - name: rrhh_fichaje
+        description: Fichajes diarios de los Excel de cada centro (horas ya recalculadas)
+      - name: rrhh_ausencia
+        description: Ausencias de los Excel mensuales de RRHH
+      - name: rrhh_nomina
+        description: Nóminas mensuales del Excel de la gestoría

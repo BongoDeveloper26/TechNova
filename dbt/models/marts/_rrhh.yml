@@ -1,0 +1,70 @@
+models:
+  - name: fct_jornadas
+    description: Una fila por empleado y día trabajado, de los Excel de fichajes de cada centro
+    data_tests:
+      - unique_combinacion:
+          arguments:
+            columnas: ["fecha", "id_empleado"]
+    columns:
+      - name: id_empleado
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_empleado')
+                field: id_empleado
+      - name: id_fecha
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_fecha')
+                field: id_fecha
+      - name: horas
+        description: Horas trabajadas, recalculadas a partir de entrada, salida y pausa
+        data_tests: [not_null, no_negativo]
+      - name: horas_extra
+        description: Horas por encima de 8 en el día
+        data_tests: [no_negativo]
+
+  - name: fct_ausencias
+    description: Una fila por empleado y día laborable de ausencia
+    data_tests:
+      - unique_combinacion:
+          arguments:
+            columnas: ["fecha", "id_empleado"]
+    columns:
+      - name: tipo
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["vacaciones", "baja_medica", "asuntos_propios", "permiso"]
+
+  - name: fct_nominas
+    description: Una fila por empleado y mes, del Excel de la gestoría
+    data_tests:
+      - unique_combinacion:
+          arguments:
+            columnas: ["mes", "id_empleado"]
+    columns:
+      - name: coste_total
+        data_tests: [not_null, no_negativo]
+
+  - name: rpt_productividad_vendedor
+    description: >
+      Productividad de cada vendedor por mes. Cruza las ventas (base de datos de la tienda)
+      con las horas (Excel de fichajes) y el coste (Excel de nóminas).
+    columns:
+      - name: ventas_por_hora
+        description: Ventas en tienda divididas entre las horas trabajadas
+
+  - name: rpt_rrhh_centro_mes
+    description: Plantilla, horas, horas extra, absentismo y coste de personal por centro y mes
+    data_tests:
+      - unique_combinacion:
+          arguments:
+            columnas: ["mes", "id_ubicacion"]
+    columns:
+      - name: absentismo
+        description: Días de baja médica entre los días laborables teóricos de la plantilla
+      - name: coste_personal_sobre_ventas
+        description: Coste de personal entre ventas en tienda (vacío en los almacenes)

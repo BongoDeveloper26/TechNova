@@ -3,12 +3,13 @@ DAG technova_etl -> Ejecuta el ETL de TechNova todas las noches.
 
 Un DAG (Directed Acyclic Graph) es la lista de tareas y el ORDEN en que se ejecutan:
 
-    fecha_proceso ─> simular_ficheros ─> abrir_ejecucion ─┬─> extraer_oltp ─┐
-                                                           │                 ├─> proveedores ─> calidad ─> dbt ─> cerrar_ejecucion
-                                                           └─> divisas ──────┘
+    fecha_proceso ─> simular_ficheros ─> abrir_ejecucion ─┬─> extraer_oltp ─┬──────────────> rrhh ──┐
+                                                           │                 ├─> proveedores ─────────┼─> calidad ─> dbt ─> cerrar_ejecucion
+                                                           └─> divisas ──────┘                        │
 
   - extraer_oltp y divisas no dependen la una de la otra: Airflow las lanza A LA VEZ.
   - proveedores espera a las dos (necesita el catálogo y los tipos de cambio).
+  - rrhh (los Excel de Recursos Humanos) solo necesita los empleados de la OLTP.
   - dbt solo se ejecuta si calidad ha ido bien: no se transforman datos incorrectos.
   - cerrar_ejecucion se ejecuta SIEMPRE (trigger_rule=ALL_DONE), aunque algo falle,
     para que la ejecución quede cerrada en etl.ejecucion con su estado real.
@@ -48,7 +49,7 @@ ARGUMENTOS_POR_DEFECTO = {
         ),
         "simular_proveedores": Param(
             True, type="boolean",
-            description="Generar los CSV de proveedores de ese día (en un caso real llegarían solos)",
+            description="Generar los CSV de proveedores (y los Excel de RRHH si es fin de mes). En un caso real llegarían solos",
         ),
     },
 )
@@ -67,12 +68,20 @@ def technova_etl():
 
     @task
     def simular_ficheros(fecha: str) -> int:
-        """Hace de 'proveedores': deja en data/landing los CSV de ese día."""
+        """
+        Hace de 'mundo exterior':
+          - cada día llegan los CSV de los proveedores
+          - el último día del mes llegan además los Excel de RRHH de ese mes
+        """
         if not get_current_context()["params"].get("simular_proveedores", True):
             return 0
         from simular_proveedores import simular
+        from simular_rrhh import simular_mes_si_falta
         dia = date.fromisoformat(fecha)
-        return simular(dia, dia)
+        total = simular(dia, dia)
+        if (dia + timedelta(days=1)).day == 1:
+            total += simular_mes_si_falta(dia)
+        return total
 
     @task
     def abrir_ejecucion(fecha: str) -> int:
@@ -94,6 +103,11 @@ def technova_etl():
     def proveedores(id_ejecucion: int) -> str:
         from run_etl import ejecutar_paso
         return ejecutar_paso(id_ejecucion, "proveedores")
+
+    @task
+    def rrhh(id_ejecucion: int) -> str:
+        from run_etl import ejecutar_paso
+        return ejecutar_paso(id_ejecucion, "rrhh")
 
     @task(retries=0)  # si los datos están mal, reintentar no los arregla
     def calidad(id_ejecucion: int) -> str:
@@ -125,11 +139,14 @@ def technova_etl():
     oltp = extraer_oltp(id_ejecucion)
     tipos = divisas(id_ejecucion)
     tarifas = proveedores(id_ejecucion)
+    excel_rrhh = rrhh(id_ejecucion)
     controles = calidad(id_ejecucion)
 
     modelo = transformar_dbt(id_ejecucion)
 
-    [oltp, tipos] >> tarifas >> controles >> modelo >> cerrar_ejecucion(id_ejecucion)
+    [oltp, tipos] >> tarifas
+    oltp >> excel_rrhh
+    [tarifas, excel_rrhh] >> controles >> modelo >> cerrar_ejecucion(id_ejecucion)
 
 
 technova_etl()

@@ -35,11 +35,11 @@ flowchart LR
 | Base de datos | PostgreSQL 17 |
 | Infraestructura | Docker · Docker Compose |
 | Generación de datos | Python · Faker · psycopg 3 |
-| ETL | Python · pandas · requests · API REST |
+| ETL | Python · pandas · openpyxl · requests · API REST |
 | Orquestación | Apache Airflow 3.3 |
 | Transformación | dbt 1.11 (dbt-postgres) |
 | Visualización | Metabase 0.64 (LTS) |
-| Machine Learning | scikit-learn *(Fase 7)* |
+| Machine Learning | scikit-learn *(Fase 8)* |
 
 ---
 
@@ -237,6 +237,8 @@ flowchart LR
     A --> O[extraer_oltp]
     A --> D[divisas]
     O --> P[proveedores]
+    O --> R[rrhh]
+    R --> C
     D --> P
     P --> C[calidad] --> T[transformar_dbt] --> Z[cerrar_ejecucion]
 ```
@@ -368,6 +370,42 @@ El script es idempotente: si se vuelve a ejecutar, actualiza los gráficos exist
 
 ---
 
+## Excel de Recursos Humanos
+
+Cada mes llegan a RRHH tres tipos de Excel **hechos a mano**, con los problemas típicos de los Excel reales. `etl/excel_rrhh.py` los lee, limpia, valida y carga, y dbt los cruza con las ventas.
+
+| Excel | Quién lo envía | Problemas que resuelve el ETL |
+|---|---|---|
+| `fichajes_<centro>_<mes>.xlsx` | El encargado de cada centro | Título y celdas combinadas antes de la cabecera, filas en blanco entre semanas, fila de TOTAL, fechas y horas escritas como texto (`9:58`, `09.58`, `9h58`), columna de horas que es una fórmula sin valor, empleados sin número (se identifican por el nombre, sin importar tildes ni mayúsculas) |
+| `ausencias_<mes>.xlsx` | RRHH | Una hoja por centro con el nombre recortado a 31 caracteres, solo el nombre del empleado, el tipo escrito de muchas formas (`Vacaciones`, `VAC`, `IT`, `Baja`...) |
+| `nominas_<mes>.xlsx` | La gestoría | Cabecera en la fila 7 tras el membrete, `Apellidos, Nombre`, importes como texto (`1.850,00 €`), fila de TOTALES con fórmulas |
+
+**Técnicas**
+
+| Técnica | Para qué |
+|---|---|
+| Búsqueda de la fila de cabecera | No se da por hecho que los datos empiecen en la fila 1 |
+| Recalcular en vez de leer fórmulas | Las horas se calculan a partir de entrada, salida y pausa; no se confía en la fórmula del Excel |
+| Validaciones por fila | Salida antes que la entrada, fichaje sin salida, empleado desconocido o ambiguo, fechas invertidas, importes que no cuadran (base + plus + horas extra = devengado) |
+| Carga por partición | Cada Excel sustituye por completo los datos de su centro y mes. Si llega un Excel corregido con filas borradas, esas filas desaparecen (un `UPSERT` las dejaría) |
+| Hash de cada fichero | Igual que con los CSV: no se procesa dos veces, pero se detecta un reenvío corregido |
+
+**Modelos de dbt**
+
+| Modelo | Contenido |
+|---|---|
+| `fct_jornadas` | Una fila por empleado y día trabajado, con horas ordinarias y extra |
+| `fct_ausencias` | Los periodos de ausencia desplegados en días laborables (si se solapan, cuenta uno por día con prioridad para la baja médica) |
+| `fct_nominas` | Una fila por empleado y mes |
+| `rpt_productividad_vendedor` | Ventas por hora trabajada y por euro de coste de cada vendedor: cruza ventas (base de datos), horas (Excel de fichajes) y coste (Excel de nóminas) |
+| `rpt_rrhh_centro_mes` | Plantilla, horas, horas extra, absentismo y coste de personal frente a ventas por centro y mes |
+
+Un test de dbt con severidad `warn` compara las horas extra que paga la gestoría con las fichadas, y avisa cuando no cuadran.
+
+En Airflow, la tarea `rrhh` se ejecuta en paralelo con proveedores, y los Excel de cada mes llegan el último día del mes.
+
+---
+
 ## Puesta en marcha
 
 **Requisitos:** Docker Desktop (con al menos 6 GB de memoria asignada para tener todo encendido a la vez) y Python 3.10+
@@ -390,8 +428,9 @@ python data_generator/main.py
 # 4. (Opcional) Medir el efecto de los índices
 python benchmarks/benchmark_indices.py
 
-# 5. Simular los ficheros de los proveedores y lanzar el ETL a mano (incluye dbt)
+# 5. Simular los ficheros de proveedores y los Excel de RRHH, y lanzar el ETL a mano (incluye dbt)
 python etl/simular_proveedores.py --desde 2025-12-01 --hasta 2025-12-31
+python etl/simular_rrhh.py --desde 2025-01 --hasta 2025-12
 python etl/run_etl.py --fecha 2025-12-31
 
 # 6. (Opcional) Documentación de dbt en http://localhost:8081
@@ -453,9 +492,11 @@ technova-data-platform/
 │   ├── extraer_oltp.py         # OLTP -> staging
 │   ├── divisas.py              # API -> staging
 │   ├── proveedores.py          # CSV -> staging
+│   ├── excel_rrhh.py           # Excel de RRHH -> staging
 │   ├── calidad.py              # controles de calidad
 │   ├── transformar_dbt.py      # lanza dbt y resume sus resultados
-│   └── simular_proveedores.py  # genera los CSV (simula el exterior)
+│   ├── simular_proveedores.py  # genera los CSV (simula el exterior)
+│   └── simular_rrhh.py         # genera los Excel de RRHH (simula el exterior)
 ├── dashboard/
 │   ├── dashboards.py           # definición de los 2 dashboards y sus 23 gráficos
 │   └── crear_dashboard.py      # los crea en Metabase con su API
@@ -489,4 +530,6 @@ technova-data-platform/
 - [x] **Fase 4b** — Orquestación con Airflow
 - [x] **Fase 5** — Data warehouse en estrella con dbt
 - [x] **Fase 6** — Dashboards de negocio con Metabase
-- [ ] **Fase 7** — Machine Learning
+- [x] **Fase 7a** — ETL de Excel de Recursos Humanos
+- [ ] **Fase 7b** — Informes automáticos en Excel y dashboard de RRHH
+- [ ] **Fase 8** — Machine Learning

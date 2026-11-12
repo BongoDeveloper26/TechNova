@@ -14,10 +14,10 @@ Se puede usar de dos formas:
     cerrar_ejecucion(id)
 
 Orden de los pasos:
-    oltp ──┐
-           ├──> proveedores ──> calidad ──> dbt
-    divisas┘
-    (los proveedores necesitan el catálogo y los tipos de cambio;
+    oltp ───┬──────────────> rrhh ──────┐
+            ├──> proveedores ───────────┼──> calidad ──> dbt
+    divisas ┘                           │
+    (proveedores necesita el catálogo y los tipos de cambio; rrhh necesita los empleados;
      dbt solo debe ejecutarse si la calidad está bien)
 
 Código de salida: 0 si todo va bien o con avisos, 1 si hay errores.
@@ -29,12 +29,13 @@ from datetime import date
 from conexiones import conectar_dw, conectar_oltp, preparar_dw
 from registro import Ejecucion, log
 
-PASOS = ["oltp", "divisas", "proveedores", "calidad", "dbt"]
+PASOS = ["oltp", "divisas", "proveedores", "rrhh", "calidad", "dbt"]
 
 NOMBRES = {
     "oltp": "Extraer OLTP -> staging",
     "divisas": "API tipos de cambio -> staging",
     "proveedores": "CSV proveedores -> staging",
+    "rrhh": "Excel RRHH -> staging",
     "calidad": "Controles de calidad",
     "dbt": "dbt build -> data warehouse",
 }
@@ -54,6 +55,7 @@ def ejecutar_paso(id_ejecucion: int, paso: str, lanzar_si_falla: bool = True) ->
     # Los módulos se importan aquí dentro: cada paso solo carga lo que necesita
     import calidad
     import divisas
+    import excel_rrhh
     import extraer_oltp
     import proveedores
     import transformar_dbt
@@ -68,6 +70,8 @@ def ejecutar_paso(id_ejecucion: int, paso: str, lanzar_si_falla: bool = True) ->
                 divisas.ejecutar(conn_dw, fecha, r)
             elif paso == "proveedores":
                 proveedores.ejecutar(conn_dw, ejecucion.id, fecha, r)
+            elif paso == "rrhh":
+                excel_rrhh.ejecutar(conn_dw, ejecucion.id, fecha, r)
             elif paso == "calidad":
                 calidad.ejecutar(conn_oltp, conn_dw, ejecucion.id, fecha, r)
             elif paso == "dbt":

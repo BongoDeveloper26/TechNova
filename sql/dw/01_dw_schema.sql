@@ -126,3 +126,50 @@ CREATE TABLE IF NOT EXISTS staging.proveedor_tarifa (
     cargado_en         TIMESTAMPTZ   NOT NULL DEFAULT now(),
     PRIMARY KEY (fecha_tarifa, id_proveedor, sku)
 );
+
+-- ---------------------------------------------------------------------
+--  STAGING DE RECURSOS HUMANOS (de los Excel mensuales)
+-- ---------------------------------------------------------------------
+
+-- Un fichaje por empleado y día
+CREATE TABLE IF NOT EXISTS staging.rrhh_fichaje (
+    fecha        DATE         NOT NULL,
+    id_empleado  INTEGER      NOT NULL,
+    id_ubicacion INTEGER      NOT NULL,
+    entrada      TIME         NOT NULL,
+    salida       TIME         NOT NULL,
+    pausa_min    INTEGER      NOT NULL CHECK (pausa_min >= 0),
+    horas        NUMERIC(5,2) NOT NULL CHECK (horas > 0 AND horas <= 14),  -- recalculadas, no las del Excel
+    fichero      VARCHAR(200) NOT NULL,
+    cargado_en   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (fecha, id_empleado)
+);
+
+-- Ausencias (la parte de cada una que cae dentro del mes del fichero)
+CREATE TABLE IF NOT EXISTS staging.rrhh_ausencia (
+    id_empleado INTEGER      NOT NULL,
+    tipo        VARCHAR(20)  NOT NULL
+                CHECK (tipo IN ('vacaciones', 'baja_medica', 'asuntos_propios', 'permiso')),
+    desde       DATE         NOT NULL,
+    hasta       DATE         NOT NULL,
+    fichero     VARCHAR(200) NOT NULL,
+    cargado_en  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (id_empleado, desde),
+    CHECK (hasta >= desde)
+);
+
+-- Una nómina por empleado y mes
+CREATE TABLE IF NOT EXISTS staging.rrhh_nomina (
+    mes                 DATE          NOT NULL,   -- primer día del mes
+    id_empleado         INTEGER       NOT NULL,
+    salario_base        NUMERIC(10,2) NOT NULL CHECK (salario_base >= 0),
+    plus_ventas         NUMERIC(10,2) NOT NULL CHECK (plus_ventas >= 0),
+    horas_extra         NUMERIC(6,2)  NOT NULL CHECK (horas_extra >= 0),
+    importe_horas_extra NUMERIC(10,2) NOT NULL CHECK (importe_horas_extra >= 0),
+    total_devengado     NUMERIC(10,2) NOT NULL,
+    ss_empresa          NUMERIC(10,2) NOT NULL,
+    coste_total         NUMERIC(10,2) NOT NULL,
+    fichero             VARCHAR(200)  NOT NULL,
+    cargado_en          TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    PRIMARY KEY (mes, id_empleado)
+);

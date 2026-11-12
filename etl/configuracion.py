@@ -130,6 +130,9 @@ CONTRATOS_PROVEEDOR = {
 # Si un fichero tiene más de este % de filas malas, se descarta ENTERO
 # (seguramente el proveedor ha mandado un fichero roto: mejor no cargar nada)
 UMBRAL_RECHAZO_FICHERO = 0.25
+# ...pero solo en ficheros con al menos estas filas. En uno de 3 filas, una sola fila mala
+# ya es el 33 %: eso no significa que el fichero esté roto
+MIN_FILAS_PARA_UMBRAL = 20
 
 # Un precio de proveedor (en €) fuera de este rango respecto al coste que
 # conocemos se considera anómalo (p. ej. alguien escribió 129900 en vez de 1299,00)

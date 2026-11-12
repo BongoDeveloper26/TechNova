@@ -20,8 +20,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from configuracion import (CARPETA_LANDING, COLUMNAS_CANONICAS, CONTRATOS_PROVEEDOR, RAIZ,
-                           RANGO_PRECIO_VALIDO, UMBRAL_RECHAZO_FICHERO)
+from configuracion import (CARPETA_LANDING, COLUMNAS_CANONICAS, CONTRATOS_PROVEEDOR,
+                           MIN_FILAS_PARA_UMBRAL, RAIZ, RANGO_PRECIO_VALIDO,
+                           UMBRAL_RECHAZO_FICHERO)
 from registro import log
 
 
@@ -217,7 +218,7 @@ def procesar_fichero(conn_dw, id_ejecucion, ruta, referencias, resultado):
     resultado.leidas += total
     guardar_rechazos(conn_dw, id_ejecucion, rechazadas, original, nombre)
 
-    if pct_rechazo > UMBRAL_RECHAZO_FICHERO:
+    if pct_rechazo > UMBRAL_RECHAZO_FICHERO and total >= MIN_FILAS_PARA_UMBRAL:
         # "Cortacircuitos": un fichero tan malo probablemente está roto. No cargamos nada.
         resultado.rechazadas += total
         registrar_fichero(conn_dw, nombre, hash_sha, id_ejecucion, "descartado", total, 0, total)
