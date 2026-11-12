@@ -1,0 +1,294 @@
+"""
+dashboards.py -> DEFINICIÓN de los dashboards de TechNova ("dashboards como código").
+
+Cada gráfico (en Metabase se llama "pregunta" o "card") tiene:
+  - nombre:  el título que se ve en el dashboard
+  - tipo:    cómo se dibuja: scalar (un número), line, bar, row (barras horizontales),
+             pie (tarta), table (tabla)
+  - sql:     la consulta. Todas leen del esquema en estrella (marts) que construye dbt
+  - ejes:    para gráficos: qué columna va en el eje X (dimensiones) y cuál en el Y (métricas)
+  - euros / porcentaje: columnas que se muestran con formato de € o de %
+  - pos:     (fila, columna, ancho, alto) en la rejilla del dashboard, que tiene 24 columnas
+
+crear_dashboard.py lee este fichero y lo crea todo en Metabase a través de su API.
+Para cambiar un gráfico, se cambia aquí y se vuelve a ejecutar el script.
+"""
+
+# Año más reciente con ventas (para los indicadores "del último año")
+ULTIMO_ANIO = "(SELECT MAX(f.anio) FROM marts.fct_ventas v JOIN marts.dim_fecha f USING (id_fecha))"
+
+# =====================================================================
+#  DASHBOARD 1: VENTAS Y CLIENTES
+# =====================================================================
+VENTAS = {
+    "nombre": "TechNova - Ventas y clientes",
+    "descripcion": "Evolución de las ventas, márgenes, campañas y segmentación de clientes",
+    "tarjetas": [
+        # ---------------- Fila de indicadores (KPI) ----------------
+        {
+            "nombre": "Facturación neta (último año)",
+            "tipo": "scalar", "euros": ["facturacion"], "pos": (0, 0, 6, 3),
+            "sql": f"""
+SELECT ROUND(SUM(v.importe_neto_final), 0) AS facturacion
+FROM marts.fct_ventas v
+JOIN marts.dim_fecha f USING (id_fecha)
+WHERE f.anio = {ULTIMO_ANIO}""",
+        },
+        {
+            "nombre": "Pedidos (último año)",
+            "tipo": "scalar", "pos": (0, 6, 6, 3),
+            "sql": f"""
+SELECT COUNT(*) AS pedidos
+FROM marts.fct_pedidos p
+JOIN marts.dim_fecha f USING (id_fecha)
+WHERE f.anio = {ULTIMO_ANIO} AND p.estado <> 'cancelado'""",
+        },
+        {
+            "nombre": "Ticket medio (último año)",
+            "tipo": "scalar", "euros": ["ticket_medio"], "pos": (0, 12, 6, 3),
+            "sql": f"""
+SELECT ROUND(AVG(p.importe_neto), 2) AS ticket_medio
+FROM marts.fct_pedidos p
+JOIN marts.dim_fecha f USING (id_fecha)
+WHERE f.anio = {ULTIMO_ANIO} AND p.estado <> 'cancelado'""",
+        },
+        {
+            "nombre": "Margen bruto % (último año)",
+            "tipo": "scalar", "porcentaje": ["margen_pct"], "pos": (0, 18, 6, 3),
+            "sql": f"""
+SELECT ROUND(SUM(v.margen) / SUM(v.importe_neto), 4) AS margen_pct
+FROM marts.fct_ventas v
+JOIN marts.dim_fecha f USING (id_fecha)
+WHERE f.anio = {ULTIMO_ANIO}""",
+        },
+        # ---------------- Evolución ----------------
+        {
+            "nombre": "Facturación neta mensual por canal",
+            "tipo": "line", "ejes": (["mes", "canal"], ["facturacion"]), "euros": ["facturacion"],
+            "pos": (3, 0, 24, 7),
+            "sql": """
+SELECT f.anio_mes AS mes, v.canal, ROUND(SUM(v.importe_neto_final), 0) AS facturacion
+FROM marts.fct_ventas v
+JOIN marts.dim_fecha f USING (id_fecha)
+GROUP BY f.anio_mes, v.canal
+ORDER BY f.anio_mes, v.canal""",
+        },
+        # ---------------- Producto ----------------
+        {
+            "nombre": "Facturación por categoría",
+            "tipo": "row", "ejes": (["categoria"], ["facturacion"]), "euros": ["facturacion"],
+            "pos": (10, 0, 12, 6),
+            "sql": """
+SELECT p.categoria, ROUND(SUM(v.importe_neto_final), 0) AS facturacion
+FROM marts.fct_ventas v
+JOIN marts.dim_producto p USING (id_producto)
+GROUP BY p.categoria
+ORDER BY facturacion DESC""",
+        },
+        {
+            "nombre": "Margen % por categoría",
+            "tipo": "bar", "ejes": (["categoria"], ["margen_pct"]), "porcentaje": ["margen_pct"],
+            "pos": (10, 12, 12, 6),
+            "sql": """
+SELECT p.categoria, ROUND(SUM(v.margen) / SUM(v.importe_neto), 4) AS margen_pct
+FROM marts.fct_ventas v
+JOIN marts.dim_producto p USING (id_producto)
+GROUP BY p.categoria
+ORDER BY margen_pct DESC""",
+        },
+        # ---------------- Campañas ----------------
+        {
+            "nombre": "Black Friday: facturación vs margen",
+            "tipo": "bar", "ejes": (["periodo"], ["facturacion", "margen"]), "euros": ["facturacion", "margen"],
+            "pos": (16, 0, 12, 6),
+            "sql": """
+WITH semanas AS (
+    SELECT campania, fecha_inicio, fecha_fin
+    FROM stg.stg_promociones
+    WHERE campania = 'Black Friday'
+)
+SELECT
+    EXTRACT(YEAR FROM s.fecha_inicio)::int || ' - '
+      || CASE WHEN f.fecha >= s.fecha_inicio THEN 'Black Week' ELSE 'Semana anterior' END AS periodo,
+    ROUND(SUM(v.importe_neto), 0) AS facturacion,
+    ROUND(SUM(v.margen), 0)       AS margen
+FROM semanas s
+JOIN marts.dim_fecha f  ON f.fecha BETWEEN s.fecha_inicio - 7 AND s.fecha_fin
+JOIN marts.fct_ventas v ON v.id_fecha = f.id_fecha
+GROUP BY 1
+ORDER BY MIN(f.fecha)""",
+        },
+        {
+            "nombre": "Pedidos por día de la semana y canal",
+            "tipo": "bar", "ejes": (["dia", "canal"], ["pedidos"]), "pos": (16, 12, 12, 6),
+            "sql": """
+SELECT f.dia_semana || '. ' || f.nombre_dia AS dia, p.canal, COUNT(*) AS pedidos
+FROM marts.fct_pedidos p
+JOIN marts.dim_fecha f USING (id_fecha)
+WHERE p.estado <> 'cancelado'
+GROUP BY f.dia_semana, f.nombre_dia, p.canal
+ORDER BY f.dia_semana, p.canal""",
+        },
+        # ---------------- Clientes ----------------
+        {
+            "nombre": "Clientes por segmento RFM",
+            "tipo": "pie", "ejes": (["segmento_rfm"], ["clientes"]), "pos": (22, 0, 8, 7),
+            "sql": """
+SELECT segmento_rfm, COUNT(*) AS clientes
+FROM marts.dim_cliente
+WHERE segmento_rfm <> 'Sin compras'
+GROUP BY segmento_rfm
+ORDER BY clientes DESC""",
+        },
+        {
+            "nombre": "Facturación por segmento RFM",
+            "tipo": "row", "ejes": (["segmento_rfm"], ["facturacion"]), "euros": ["facturacion"],
+            "pos": (22, 8, 8, 7),
+            "sql": """
+SELECT c.segmento_rfm, ROUND(SUM(v.importe_neto_final), 0) AS facturacion
+FROM marts.fct_ventas v
+JOIN marts.dim_cliente c USING (id_cliente)
+GROUP BY c.segmento_rfm
+ORDER BY facturacion DESC""",
+        },
+        {
+            "nombre": "Clientes por rango de edad",
+            "tipo": "bar", "ejes": (["rango_edad"], ["clientes"]), "pos": (22, 16, 8, 7),
+            "sql": """
+SELECT rango_edad, COUNT(*) AS clientes
+FROM marts.dim_cliente
+WHERE num_pedidos > 0
+GROUP BY rango_edad
+ORDER BY rango_edad""",
+        },
+        {
+            "nombre": "Top 10 productos por facturación",
+            "tipo": "table", "euros": ["facturacion", "margen"], "pos": (29, 0, 24, 7),
+            "sql": """
+SELECT p.producto, p.marca, p.categoria,
+       SUM(v.cantidad)                     AS unidades,
+       ROUND(SUM(v.importe_neto_final), 0) AS facturacion,
+       ROUND(SUM(v.margen), 0)             AS margen
+FROM marts.fct_ventas v
+JOIN marts.dim_producto p USING (id_producto)
+GROUP BY p.producto, p.marca, p.categoria
+ORDER BY facturacion DESC
+LIMIT 10""",
+        },
+    ],
+}
+
+# =====================================================================
+#  DASHBOARD 2: OPERACIONES Y CALIDAD DEL DATO
+# =====================================================================
+OPERACIONES = {
+    "nombre": "TechNova - Operaciones",
+    "descripcion": "Stock, envíos, devoluciones, proveedores y salud del pipeline de datos",
+    "tarjetas": [
+        # ---------------- KPIs ----------------
+        {
+            "nombre": "Valor del stock",
+            "tipo": "scalar", "euros": ["valor_stock"], "pos": (0, 0, 6, 3),
+            "sql": "SELECT ROUND(SUM(valor_stock_eur), 0) AS valor_stock FROM marts.fct_stock",
+        },
+        {
+            "nombre": "Productos en rotura de stock",
+            "tipo": "scalar", "pos": (0, 6, 6, 3),
+            "sql": """
+SELECT COUNT(*) AS en_rotura
+FROM marts.fct_stock s
+JOIN marts.dim_producto p USING (id_producto)
+WHERE s.nivel_alerta = 'ROTURA' AND p.activo""",
+        },
+        {
+            "nombre": "Tasa de devolución (unidades)",
+            "tipo": "scalar", "porcentaje": ["tasa_devolucion"], "pos": (0, 12, 6, 3),
+            "sql": "SELECT ROUND(SUM(unidades_devueltas)::numeric / SUM(cantidad), 4) AS tasa_devolucion FROM marts.fct_ventas",
+        },
+        {
+            "nombre": "Envíos entregados en 3 días o menos",
+            "tipo": "scalar", "porcentaje": ["pct_rapidos"], "pos": (0, 18, 6, 3),
+            "sql": """
+SELECT ROUND(AVG((dias_hasta_entrega <= 3)::int), 4) AS pct_rapidos
+FROM marts.fct_pedidos
+WHERE dias_hasta_entrega IS NOT NULL""",
+        },
+        # ---------------- Logística ----------------
+        {
+            "nombre": "Días hasta la entrega por transportista (media y P90)",
+            "tipo": "bar", "ejes": (["transportista"], ["media_dias", "p90_dias"]), "pos": (3, 0, 12, 6),
+            "sql": """
+SELECT transportista,
+       ROUND(AVG(dias_hasta_entrega), 2) AS media_dias,
+       ROUND((PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY dias_hasta_entrega))::numeric, 2) AS p90_dias
+FROM marts.fct_pedidos
+WHERE dias_hasta_entrega IS NOT NULL
+GROUP BY transportista
+ORDER BY p90_dias""",
+        },
+        {
+            "nombre": "Tasa de devolución por subcategoría",
+            "tipo": "row", "ejes": (["subcategoria"], ["tasa_devolucion"]), "porcentaje": ["tasa_devolucion"],
+            "pos": (3, 12, 12, 6),
+            "sql": """
+SELECT p.subcategoria, ROUND(SUM(v.unidades_devueltas)::numeric / SUM(v.cantidad), 4) AS tasa_devolucion
+FROM marts.fct_ventas v
+JOIN marts.dim_producto p USING (id_producto)
+GROUP BY p.subcategoria
+ORDER BY tasa_devolucion DESC""",
+        },
+        # ---------------- Stock y proveedores ----------------
+        {
+            "nombre": "Alertas de stock en almacenes",
+            "tipo": "table", "pos": (9, 0, 12, 7),
+            "sql": """
+SELECT u.ubicacion AS almacen, p.producto, s.cantidad, s.stock_minimo, s.unidades_faltan, s.nivel_alerta
+FROM marts.fct_stock s
+JOIN marts.dim_producto p  USING (id_producto)
+JOIN marts.dim_ubicacion u USING (id_ubicacion)
+WHERE u.tipo = 'almacen' AND s.nivel_alerta <> 'OK' AND p.activo
+ORDER BY CASE s.nivel_alerta WHEN 'ROTURA' THEN 1 WHEN 'CRITICO' THEN 2 ELSE 3 END,
+         s.unidades_faltan DESC
+LIMIT 50""",
+        },
+        {
+            "nombre": "Desviación media de las tarifas de proveedor (%)",
+            "tipo": "line", "ejes": (["fecha", "proveedor"], ["desviacion_pct"]), "pos": (9, 12, 12, 7),
+            "sql": """
+SELECT t.fecha_tarifa AS fecha, pr.proveedor, ROUND(AVG(t.desviacion_pct) / 100, 4) AS desviacion_pct
+FROM marts.fct_tarifas_proveedor t
+JOIN marts.dim_proveedor pr USING (id_proveedor)
+GROUP BY t.fecha_tarifa, pr.proveedor
+ORDER BY t.fecha_tarifa, pr.proveedor""",
+            "porcentaje": ["desviacion_pct"],
+        },
+        # ---------------- Salud del pipeline ----------------
+        {
+            "nombre": "Últimas ejecuciones del ETL",
+            "tipo": "table", "pos": (16, 0, 14, 7),
+            "sql": """
+SELECT e.id_ejecucion, e.fecha_proceso, e.estado,
+       to_char(e.inicio, 'YYYY-MM-DD HH24:MI') AS inicio,
+       ROUND(EXTRACT(EPOCH FROM e.fin - e.inicio)::numeric, 1) AS segundos,
+       e.parametros ->> 'origen' AS origen,
+       SUM(p.filas_cargadas)   AS filas_cargadas,
+       SUM(p.filas_rechazadas) AS filas_rechazadas
+FROM etl.ejecucion e
+LEFT JOIN etl.paso p USING (id_ejecucion)
+GROUP BY e.id_ejecucion
+ORDER BY e.id_ejecucion DESC
+LIMIT 15""",
+        },
+        {
+            "nombre": "Filas rechazadas por motivo",
+            "tipo": "row", "ejes": (["motivo"], ["filas"]), "pos": (16, 14, 10, 7),
+            "sql": """
+SELECT motivo, COUNT(*) AS filas
+FROM etl.rechazo
+GROUP BY motivo
+ORDER BY filas DESC""",
+        },
+    ],
+}
+
+DASHBOARDS = [VENTAS, OPERACIONES]

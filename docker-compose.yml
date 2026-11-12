@@ -74,6 +74,32 @@ services:
       postgres:
         condition: service_healthy
 
+  metabase:
+    image: metabase/metabase:v0.64.5.6
+    container_name: technova_metabase
+    restart: unless-stopped
+    environment:
+      # Metabase guarda su configuración (usuarios, gráficos, dashboards) en este fichero.
+      # Va en un volumen para no perderla al recrear el contenedor
+      MB_DB_FILE: /metabase-data/metabase.db
+      JAVA_TIMEZONE: Europe/Madrid
+      # Límite de memoria de Java: Metabase no usará más de 1 GB
+      JAVA_OPTS: "-Xmx1g"
+    volumes:
+      - metabase_data:/metabase-data
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail -I http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 3m
+
 volumes:
   pgdata:
   pgadmin_data:
+  metabase_data:

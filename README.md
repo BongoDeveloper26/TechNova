@@ -38,7 +38,7 @@ flowchart LR
 | ETL | Python · pandas · requests · API REST |
 | Orquestación | Apache Airflow 3.3 |
 | Transformación | dbt 1.11 (dbt-postgres) |
-| Visualización | Metabase *(Fase 6)* |
+| Visualización | Metabase 0.64 (LTS) |
 | Machine Learning | scikit-learn *(Fase 7)* |
 
 ---
@@ -334,9 +334,43 @@ Genera una web con la descripción de cada modelo y columna y el gráfico de lin
 
 ---
 
+## Dashboards con Metabase
+
+Dos dashboards en **Metabase** (herramienta de BI de código abierto) que leen directamente el esquema en estrella. Se crean **desde código**: están definidos en `dashboard/dashboards.py` y `dashboard/crear_dashboard.py` los construye a través de la API de Metabase, así que cualquiera que clone el repositorio obtiene exactamente los mismos dashboards con un comando.
+
+### TechNova - Ventas y clientes
+
+| Gráfico | Tipo |
+|---|---|
+| Facturación neta, pedidos, ticket medio y margen bruto del último año | Indicadores |
+| Facturación neta mensual por canal (web y tienda) | Líneas |
+| Facturación y margen por categoría | Barras |
+| Black Friday: facturación y margen frente a la semana anterior | Barras |
+| Pedidos por día de la semana y canal | Barras |
+| Clientes y facturación por segmento RFM | Tarta y barras |
+| Clientes por rango de edad | Barras |
+| Top 10 productos por facturación | Tabla |
+
+### TechNova - Operaciones
+
+| Gráfico | Tipo |
+|---|---|
+| Valor del stock, productos en rotura, tasa de devolución y envíos en 3 días o menos | Indicadores |
+| Días hasta la entrega por transportista (media y percentil 90) | Barras |
+| Tasa de devolución por subcategoría | Barras |
+| Alertas de stock en almacenes | Tabla |
+| Desviación diaria de las tarifas de cada proveedor | Líneas |
+| Últimas ejecuciones del ETL y filas rechazadas por motivo | Tabla y barras |
+
+La última fila convierte el dashboard en un **monitor del propio pipeline**: muestra cuándo se ejecutó el ETL, cuánto tardó y qué rechazó.
+
+El script es idempotente: si se vuelve a ejecutar, actualiza los gráficos existentes en vez de duplicarlos. Busca los objetos listando la colección `TechNova` y no con el buscador de Metabase, que se indexa en segundo plano.
+
+---
+
 ## Puesta en marcha
 
-**Requisitos:** Docker Desktop (con al menos 4 GB de memoria asignada) y Python 3.10+
+**Requisitos:** Docker Desktop (con al menos 6 GB de memoria asignada para tener todo encendido a la vez) y Python 3.10+
 
 ```bash
 # 1. Clonar y configurar
@@ -363,6 +397,9 @@ python etl/run_etl.py --fecha 2025-12-31
 # 6. (Opcional) Documentación de dbt en http://localhost:8081
 python etl/transformar_dbt.py docs generate
 python etl/transformar_dbt.py docs serve --port 8081
+
+# 7. Crear los dashboards en Metabase
+python dashboard/crear_dashboard.py
 ```
 
 El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera vez tarda unos minutos en construir su imagen. Al entrar en la web, hay que activar el DAG `technova_etl` (los DAG nuevos empiezan en pausa).
@@ -372,6 +409,7 @@ El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera 
 | PostgreSQL | `localhost:5432` |
 | pgAdmin | http://localhost:5050 |
 | Airflow | http://localhost:8080 |
+| Metabase | http://localhost:3000 |
 
 ---
 
@@ -379,7 +417,7 @@ El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera 
 
 ```
 technova-data-platform/
-├── docker-compose.yml          # PostgreSQL, pgAdmin y Airflow
+├── docker-compose.yml          # PostgreSQL, pgAdmin, Airflow y Metabase
 ├── requirements.txt
 ├── airflow/
 │   ├── Dockerfile              # imagen oficial + librerías del ETL
@@ -418,6 +456,9 @@ technova-data-platform/
 │   ├── calidad.py              # controles de calidad
 │   ├── transformar_dbt.py      # lanza dbt y resume sus resultados
 │   └── simular_proveedores.py  # genera los CSV (simula el exterior)
+├── dashboard/
+│   ├── dashboards.py           # definición de los 2 dashboards y sus 23 gráficos
+│   └── crear_dashboard.py      # los crea en Metabase con su API
 ├── benchmarks/
 │   └── benchmark_indices.py
 ├── dbt/
@@ -447,5 +488,5 @@ technova-data-platform/
 - [x] **Fase 4a** — ETL multi-fuente con validación y controles de calidad
 - [x] **Fase 4b** — Orquestación con Airflow
 - [x] **Fase 5** — Data warehouse en estrella con dbt
-- [ ] **Fase 6** — Dashboard de negocio
+- [x] **Fase 6** — Dashboards de negocio con Metabase
 - [ ] **Fase 7** — Machine Learning
