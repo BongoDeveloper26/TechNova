@@ -4,13 +4,14 @@ DAG technova_etl -> Ejecuta el ETL de TechNova todas las noches.
 Un DAG (Directed Acyclic Graph) es la lista de tareas y el ORDEN en que se ejecutan:
 
     fecha_proceso ─> simular_ficheros ─> abrir_ejecucion ─┬─> extraer_oltp ─┬──────────────> rrhh ──┐
-                                                           │                 ├─> proveedores ─────────┼─> calidad ─> dbt ─> cerrar_ejecucion
+                                                           │                 ├─> proveedores ─────────┼─> calidad ─> dbt ─> informes ─> cerrar_ejecucion
                                                            └─> divisas ──────┘                        │
 
   - extraer_oltp y divisas no dependen la una de la otra: Airflow las lanza A LA VEZ.
   - proveedores espera a las dos (necesita el catálogo y los tipos de cambio).
   - rrhh (los Excel de Recursos Humanos) solo necesita los empleados de la OLTP.
   - dbt solo se ejecuta si calidad ha ido bien: no se transforman datos incorrectos.
+  - informes genera los Excel mensuales (solo el último día del mes; los demás días no hace nada).
   - cerrar_ejecucion se ejecuta SIEMPRE (trigger_rule=ALL_DONE), aunque algo falle,
     para que la ejecución quede cerrada en etl.ejecucion con su estado real.
 
@@ -120,6 +121,12 @@ def technova_etl():
         from run_etl import ejecutar_paso
         return ejecutar_paso(id_ejecucion, "dbt")
 
+    @task
+    def informes(id_ejecucion: int) -> str:
+        """El último día del mes: informes Excel de cada tienda y de RRHH en informes/<AAAA-MM>/."""
+        from run_etl import ejecutar_paso
+        return ejecutar_paso(id_ejecucion, "informes")
+
     @task(trigger_rule=TriggerRule.ALL_DONE, retries=0)
     def cerrar_ejecucion(id_ejecucion: int) -> str:
         from run_etl import cerrar_ejecucion as cerrar
@@ -146,7 +153,8 @@ def technova_etl():
 
     [oltp, tipos] >> tarifas
     oltp >> excel_rrhh
-    [tarifas, excel_rrhh] >> controles >> modelo >> cerrar_ejecucion(id_ejecucion)
+    excel_informes = informes(id_ejecucion)
+    [tarifas, excel_rrhh] >> controles >> modelo >> excel_informes >> cerrar_ejecucion(id_ejecucion)
 
 
 technova_etl()

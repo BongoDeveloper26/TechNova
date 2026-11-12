@@ -15,10 +15,11 @@ Se puede usar de dos formas:
 
 Orden de los pasos:
     oltp ───┬──────────────> rrhh ──────┐
-            ├──> proveedores ───────────┼──> calidad ──> dbt
+            ├──> proveedores ───────────┼──> calidad ──> dbt ──> informes
     divisas ┘                           │
     (proveedores necesita el catálogo y los tipos de cambio; rrhh necesita los empleados;
-     dbt solo debe ejecutarse si la calidad está bien)
+     dbt solo debe ejecutarse si la calidad está bien;
+     informes genera los Excel mensuales, solo el último día del mes)
 
 Código de salida: 0 si todo va bien o con avisos, 1 si hay errores.
 """
@@ -29,7 +30,7 @@ from datetime import date
 from conexiones import conectar_dw, conectar_oltp, preparar_dw
 from registro import Ejecucion, log
 
-PASOS = ["oltp", "divisas", "proveedores", "rrhh", "calidad", "dbt"]
+PASOS = ["oltp", "divisas", "proveedores", "rrhh", "calidad", "dbt", "informes"]
 
 NOMBRES = {
     "oltp": "Extraer OLTP -> staging",
@@ -38,6 +39,7 @@ NOMBRES = {
     "rrhh": "Excel RRHH -> staging",
     "calidad": "Controles de calidad",
     "dbt": "dbt build -> data warehouse",
+    "informes": "Informes mensuales en Excel",
 }
 
 
@@ -57,6 +59,7 @@ def ejecutar_paso(id_ejecucion: int, paso: str, lanzar_si_falla: bool = True) ->
     import divisas
     import excel_rrhh
     import extraer_oltp
+    import informes_excel
     import proveedores
     import transformar_dbt
 
@@ -76,6 +79,8 @@ def ejecutar_paso(id_ejecucion: int, paso: str, lanzar_si_falla: bool = True) ->
                 calidad.ejecutar(conn_oltp, conn_dw, ejecucion.id, fecha, r)
             elif paso == "dbt":
                 transformar_dbt.ejecutar(r)
+            elif paso == "informes":
+                informes_excel.ejecutar(fecha, r)
             else:
                 raise ValueError(f"Paso desconocido: {paso}")
 
@@ -99,6 +104,9 @@ def ejecutar_etl(fecha_proceso: date, pasos=PASOS) -> str:
     for paso in pasos:
         if paso == "dbt" and estados.get("calidad") == "error":
             log.error("-> dbt NO se ejecuta porque los controles de calidad han fallado")
+            continue
+        if paso == "informes" and estados.get("dbt") == "error":
+            log.error("-> Los informes NO se generan porque dbt ha fallado")
             continue
         estados[paso] = ejecutar_paso(id_ejecucion, paso, lanzar_si_falla=False)
     return cerrar_ejecucion(id_ejecucion)

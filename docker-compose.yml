@@ -68,6 +68,7 @@ services:
       - ./dbt:/opt/technova/dbt
       - ./data:/opt/technova/data
       - ./logs:/opt/technova/logs
+      - ./informes:/opt/technova/informes
     ports:
       - "8080:8080"
     depends_on:

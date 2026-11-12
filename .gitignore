@@ -8,3 +8,4 @@ logs/
 dbt/target/
 dbt/logs/
 dbt/dbt_packages/
+informes/

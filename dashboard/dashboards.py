@@ -235,7 +235,8 @@ SELECT p.subcategoria, ROUND(SUM(v.unidades_devueltas)::numeric / SUM(v.cantidad
 FROM marts.fct_ventas v
 JOIN marts.dim_producto p USING (id_producto)
 GROUP BY p.subcategoria
-ORDER BY tasa_devolucion DESC""",
+ORDER BY tasa_devolucion DESC
+LIMIT 10""",
         },
         # ---------------- Stock y proveedores ----------------
         {
@@ -258,6 +259,8 @@ LIMIT 50""",
 SELECT t.fecha_tarifa AS fecha, pr.proveedor, ROUND(AVG(t.desviacion_pct) / 100, 4) AS desviacion_pct
 FROM marts.fct_tarifas_proveedor t
 JOIN marts.dim_proveedor pr USING (id_proveedor)
+-- Solo los últimos 30 días con tarifas (si no, mezcla periodos muy separados en el eje)
+WHERE t.fecha_tarifa >= (SELECT MAX(fecha_tarifa) FROM marts.fct_tarifas_proveedor) - 30
 GROUP BY t.fecha_tarifa, pr.proveedor
 ORDER BY t.fecha_tarifa, pr.proveedor""",
             "porcentaje": ["desviacion_pct"],
@@ -291,4 +294,111 @@ ORDER BY filas DESC""",
     ],
 }
 
-DASHBOARDS = [VENTAS, OPERACIONES]
+# =====================================================================
+#  DASHBOARD 3: RECURSOS HUMANOS (de los Excel de RRHH)
+# =====================================================================
+ULTIMO_MES_RRHH = "(SELECT MAX(mes) FROM marts.rpt_rrhh_centro_mes)"
+
+RRHH = {
+    "nombre": "TechNova - Recursos Humanos",
+    "descripcion": "Horas, horas extra, absentismo, coste de personal y productividad, a partir de los Excel de RRHH",
+    "tarjetas": [
+        # ---------------- KPIs del último mes ----------------
+        {
+            "nombre": "Plantilla (último mes)",
+            "tipo": "scalar", "pos": (0, 0, 6, 3),
+            "sql": f"SELECT SUM(plantilla) AS plantilla FROM marts.rpt_rrhh_centro_mes WHERE mes = {ULTIMO_MES_RRHH}",
+        },
+        {
+            "nombre": "Horas extra (último mes)",
+            "tipo": "scalar", "pos": (0, 6, 6, 3),
+            "sql": f"SELECT ROUND(SUM(horas_extra)) AS horas_extra FROM marts.rpt_rrhh_centro_mes WHERE mes = {ULTIMO_MES_RRHH}",
+        },
+        {
+            "nombre": "Absentismo (último mes)",
+            "tipo": "scalar", "porcentaje": ["absentismo"], "pos": (0, 12, 6, 3),
+            "sql": f"""
+SELECT ROUND(SUM(dias_baja)::numeric / NULLIF(SUM(plantilla * l.dias), 0), 4) AS absentismo
+FROM marts.rpt_rrhh_centro_mes r
+CROSS JOIN (SELECT COUNT(*) AS dias FROM marts.dim_fecha
+            WHERE es_laborable AND date_trunc('month', fecha) = {ULTIMO_MES_RRHH}) l
+WHERE r.mes = {ULTIMO_MES_RRHH}""",
+        },
+        {
+            "nombre": "Coste de personal (último mes)",
+            "tipo": "scalar", "euros": ["coste"], "pos": (0, 18, 6, 3),
+            "sql": f"SELECT ROUND(SUM(coste_personal)) AS coste FROM marts.rpt_rrhh_centro_mes WHERE mes = {ULTIMO_MES_RRHH}",
+        },
+        # ---------------- Evolución ----------------
+        {
+            "nombre": "Horas extra por mes y tipo de centro",
+            "tipo": "bar", "ejes": (["mes", "tipo"], ["horas_extra"]), "pos": (3, 0, 12, 7),
+            "sql": """
+SELECT to_char(mes, 'YYYY-MM') AS mes, tipo, ROUND(SUM(horas_extra)) AS horas_extra
+FROM marts.rpt_rrhh_centro_mes
+GROUP BY mes, tipo
+ORDER BY mes, tipo""",
+        },
+        {
+            "nombre": "Coste de personal mensual",
+            "tipo": "line", "ejes": (["mes"], ["coste"]), "euros": ["coste"], "pos": (3, 12, 12, 7),
+            "sql": """
+SELECT to_char(mes, 'YYYY-MM') AS mes, ROUND(SUM(coste_personal)) AS coste
+FROM marts.rpt_rrhh_centro_mes
+GROUP BY mes
+ORDER BY mes""",
+        },
+        # ---------------- Centros ----------------
+        {
+            "nombre": "Absentismo por centro (último año)",
+            "tipo": "row", "ejes": (["centro"], ["absentismo"]), "porcentaje": ["absentismo"], "pos": (10, 0, 12, 7),
+            "sql": """
+SELECT centro, ROUND(SUM(dias_baja)::numeric / NULLIF(SUM(plantilla * l.dias), 0), 4) AS absentismo
+FROM marts.rpt_rrhh_centro_mes r
+JOIN (SELECT date_trunc('month', fecha)::date AS mes, COUNT(*) AS dias
+      FROM marts.dim_fecha WHERE es_laborable GROUP BY 1) l USING (mes)
+WHERE r.mes > (SELECT MAX(mes) FROM marts.rpt_rrhh_centro_mes) - INTERVAL '12 months'
+GROUP BY centro
+ORDER BY absentismo DESC""",
+        },
+        {
+            "nombre": "Ventas por hora trabajada por tienda (último año)",
+            "tipo": "row", "ejes": (["tienda"], ["ventas_por_hora"]), "euros": ["ventas_por_hora"],
+            "pos": (10, 12, 12, 7),
+            "sql": """
+SELECT tienda, ROUND(SUM(ventas) / NULLIF(SUM(horas), 0), 2) AS ventas_por_hora
+FROM marts.rpt_productividad_vendedor
+WHERE mes > (SELECT MAX(mes) FROM marts.rpt_productividad_vendedor) - INTERVAL '12 months'
+GROUP BY tienda
+ORDER BY ventas_por_hora DESC""",
+        },
+        {
+            "nombre": "Días de ausencia por tipo (último año)",
+            "tipo": "pie", "ejes": (["tipo"], ["dias"]), "pos": (17, 0, 8, 7),
+            "sql": """
+SELECT INITCAP(REPLACE(tipo, '_', ' ')) AS tipo, COUNT(*) AS dias
+FROM marts.fct_ausencias
+WHERE fecha > (SELECT MAX(fecha) FROM marts.fct_ausencias) - INTERVAL '12 months'
+GROUP BY tipo
+ORDER BY dias DESC""",
+        },
+        {
+            "nombre": "Top 10 vendedores por ventas por hora (último año)",
+            "tipo": "table", "euros": ["ventas", "ventas_por_hora"], "pos": (17, 8, 16, 7),
+            "sql": """
+SELECT empleado, tienda,
+       ROUND(SUM(horas))                                   AS horas,
+       ROUND(SUM(ventas))                                  AS ventas,
+       ROUND(SUM(ventas) / NULLIF(SUM(horas), 0), 2)       AS ventas_por_hora,
+       ROUND(SUM(ventas) / NULLIF(SUM(coste_total), 0), 2) AS ventas_por_euro_coste
+FROM marts.rpt_productividad_vendedor
+WHERE mes > (SELECT MAX(mes) FROM marts.rpt_productividad_vendedor) - INTERVAL '12 months'
+GROUP BY empleado, tienda
+HAVING SUM(horas) > 100
+ORDER BY ventas_por_hora DESC
+LIMIT 10""",
+        },
+    ],
+}
+
+DASHBOARDS = [VENTAS, OPERACIONES, RRHH]

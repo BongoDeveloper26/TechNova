@@ -240,7 +240,7 @@ flowchart LR
     O --> R[rrhh]
     R --> C
     D --> P
-    P --> C[calidad] --> T[transformar_dbt] --> Z[cerrar_ejecucion]
+    P --> C[calidad] --> T[transformar_dbt] --> I[informes] --> Z[cerrar_ejecucion]
 ```
 
 | Decisión | Motivo |
@@ -251,6 +251,7 @@ flowchart LR
 | 2 reintentos con 2 minutos de espera | Absorbe fallos temporales (API caída, red) |
 | `calidad` sin reintentos | Reintentar no arregla datos incorrectos |
 | `transformar_dbt` después de `calidad` | dbt solo transforma datos que han pasado los controles |
+| `informes` después de `transformar_dbt` | Los informes Excel se generan el último día de cada mes, con los datos ya transformados |
 | `cerrar_ejecucion` con `trigger_rule=ALL_DONE` | Se ejecuta siempre y deja la ejecución cerrada en `etl.ejecucion` con su estado real |
 | `max_active_runs=1` | Dos cargas a la vez podrían pisarse |
 | Importaciones del ETL dentro de las tareas | Airflow lee el DAG cada pocos segundos; así esa lectura es instantánea |
@@ -338,7 +339,7 @@ Genera una web con la descripción de cada modelo y columna y el gráfico de lin
 
 ## Dashboards con Metabase
 
-Dos dashboards en **Metabase** (herramienta de BI de código abierto) que leen directamente el esquema en estrella. Se crean **desde código**: están definidos en `dashboard/dashboards.py` y `dashboard/crear_dashboard.py` los construye a través de la API de Metabase, así que cualquiera que clone el repositorio obtiene exactamente los mismos dashboards con un comando.
+Tres dashboards en **Metabase** (herramienta de BI de código abierto) que leen directamente el esquema en estrella. Se crean **desde código**: están definidos en `dashboard/dashboards.py` y `dashboard/crear_dashboard.py` los construye a través de la API de Metabase, así que cualquiera que clone el repositorio obtiene exactamente los mismos dashboards con un comando.
 
 ### TechNova - Ventas y clientes
 
@@ -406,6 +407,21 @@ En Airflow, la tarea `rrhh` se ejecuta en paralelo con proveedores, y los Excel 
 
 ---
 
+## Informes automáticos en Excel
+
+El camino contrario: `etl/informes_excel.py` genera cada fin de mes **informes en Excel listos para enviar**, a partir del data warehouse. Son 10 ficheros en `informes/<AAAA-MM>/`.
+
+| Informe | Para quién | Hojas |
+|---|---|---|
+| `informe_tienda_<tienda>_<mes>.xlsx` (uno por tienda) | El encargado de cada tienda | **Resumen**: indicadores del mes frente al anterior, con la variación en verde o rojo según sea buena o mala, y gráfico de ventas por categoría. **Vendedores**: tabla con filtros, ranking y barras de datos en ventas por hora. **Ventas diarias**: con media móvil de 7 días y gráfico de líneas. **Top productos** |
+| `informe_rrhh_<mes>.xlsx` | Recursos Humanos | **Centros**: plantilla, horas, absentismo y coste, con alerta en rojo si el absentismo supera el 3 % y escala de color en horas extra. **Horas extra**: top 20. **Ausencias** del mes. **Evolución**: 12 meses con gráficos |
+
+Los valores derivados (ticket medio, variaciones, ventas por hora, ranking, medias móviles, totales) se escriben como **fórmulas de Excel**, no como números: si alguien corrige un dato, todo se recalcula. Se ha comprobado con LibreOffice que ninguna fórmula de los 10 informes da error.
+
+Además, un tercer dashboard en Metabase, **TechNova - Recursos Humanos**, muestra plantilla, horas extra, absentismo y coste de personal del último mes, su evolución, el absentismo por centro, las ventas por hora trabajada de cada tienda y el top 10 de vendedores.
+
+---
+
 ## Puesta en marcha
 
 **Requisitos:** Docker Desktop (con al menos 6 GB de memoria asignada para tener todo encendido a la vez) y Python 3.10+
@@ -439,6 +455,9 @@ python etl/transformar_dbt.py docs serve --port 8081
 
 # 7. Crear los dashboards en Metabase
 python dashboard/crear_dashboard.py
+
+# 8. Generar los informes Excel de un mes
+python etl/informes_excel.py --mes 2025-12
 ```
 
 El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera vez tarda unos minutos en construir su imagen. Al entrar en la web, hay que activar el DAG `technova_etl` (los DAG nuevos empiezan en pausa).
@@ -493,12 +512,13 @@ technova-data-platform/
 │   ├── divisas.py              # API -> staging
 │   ├── proveedores.py          # CSV -> staging
 │   ├── excel_rrhh.py           # Excel de RRHH -> staging
+│   ├── informes_excel.py       # data warehouse -> informes Excel
 │   ├── calidad.py              # controles de calidad
 │   ├── transformar_dbt.py      # lanza dbt y resume sus resultados
 │   ├── simular_proveedores.py  # genera los CSV (simula el exterior)
 │   └── simular_rrhh.py         # genera los Excel de RRHH (simula el exterior)
 ├── dashboard/
-│   ├── dashboards.py           # definición de los 2 dashboards y sus 23 gráficos
+│   ├── dashboards.py           # definición de los 3 dashboards y sus 33 gráficos
 │   └── crear_dashboard.py      # los crea en Metabase con su API
 ├── benchmarks/
 │   └── benchmark_indices.py
@@ -515,6 +535,7 @@ technova-data-platform/
 │   └── tests/                  # tests singulares
 ├── data/                       # ficheros de proveedores (no se sube a Git)
 ├── logs/                       # logs del ETL (no se sube a Git)
+├── informes/                   # informes Excel generados (no se sube a Git)
 └── docs/
     └── benchmark_indices.md
 ```
@@ -531,5 +552,5 @@ technova-data-platform/
 - [x] **Fase 5** — Data warehouse en estrella con dbt
 - [x] **Fase 6** — Dashboards de negocio con Metabase
 - [x] **Fase 7a** — ETL de Excel de Recursos Humanos
-- [ ] **Fase 7b** — Informes automáticos en Excel y dashboard de RRHH
+- [x] **Fase 7b** — Informes automáticos en Excel y dashboard de RRHH
 - [ ] **Fase 8** — Machine Learning
