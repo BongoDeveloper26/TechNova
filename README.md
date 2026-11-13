@@ -48,8 +48,8 @@ flowchart LR
 | Dashboard de ventas (Metabase) | Machine Learning (Metabase) |
 |---|---|
 | ![Dashboard de ventas](docs/img/dashboard_ventas.png) | ![Dashboard de Machine Learning](docs/img/dashboard_ml.png) |
-| **ETL diario orquestado con Airflow** | **Informe Excel generado automáticamente** |
-| ![DAG del ETL](docs/img/airflow_etl.png) | ![Informe de tienda](docs/img/informe_tienda.png) |
+| **Orquestación con Airflow** | **Informe Excel generado automáticamente** |
+| ![DAG de Machine Learning](docs/img/airflow_ml.png) | ![Informe de tienda](docs/img/informe_tienda.png) |
 
 Cada sección incluye más capturas de su parte del proyecto.
 
@@ -283,12 +283,14 @@ flowchart LR
     C --> P[prever_ventas] --> R
 ```
 
-| DAG del ETL diario | DAG de Machine Learning |
-|---|---|
-| ![DAG technova_etl](docs/img/airflow_etl.png) | ![DAG technova_ml](docs/img/airflow_ml.png) |
+![Grafo de tareas del ETL diario](docs/img/airflow_historial.png)
+*Grafo de tareas del DAG `technova_etl`: `extraer_oltp` y `divisas` en paralelo, después proveedores y RRHH, controles de calidad, dbt, informes y cierre.*
 
-![Historial de ejecuciones en Airflow](docs/img/airflow_historial.png)
-*Historial de ejecuciones: cada columna es una noche y cada fila, una tarea.*
+![Resumen de ejecuciones del ETL](docs/img/airflow_etl.png)
+*Resumen de ejecuciones: dos noches fallaron en `transformar_dbt` (la imagen de Docker aún no tenía dbt instalado) y, una vez corregido, el pipeline volvió a terminar en verde. `cerrar_ejecucion` se ejecuta siempre y deja el estado real registrado.*
+
+![DAG de Machine Learning](docs/img/airflow_ml.png)
+*DAG `technova_ml`: comprueba que el data warehouse está al día y entrena los dos modelos en paralelo.*
 
 El DAG del ETL se ha probado con ejecuciones correctas, con un fallo de calidad forzado (stock negativo) y con la API de divisas caída: en los dos últimos casos las tareas dependientes no se ejecutan, la ejecución queda en `error` y el DAG en rojo.
 
@@ -366,9 +368,6 @@ python etl/transformar_dbt.py docs serve --port 8081
 
 Genera una web con la descripción de cada modelo y columna y el gráfico de linaje (de qué tabla sale cada tabla).
 
-![Gráfico de linaje de dbt](docs/img/dbt_lineage.png)
-*Linaje: de las tablas de staging (verde) a los modelos de staging, intermedios y marts.*
-
 ![Documentación de un modelo de dbt](docs/img/dbt_modelo.png)
 *Ficha de un modelo en la documentación: descripción, columnas, tests y SQL.*
 
@@ -415,6 +414,7 @@ La última fila convierte el dashboard en un **monitor del propio pipeline**: mu
 Plantilla, horas extra, absentismo y coste de personal del último mes, su evolución, el absentismo por centro, las ventas por hora trabajada de cada tienda y el top 10 de vendedores (se explica en [Excel de Recursos Humanos](#excel-de-recursos-humanos)).
 
 ![Dashboard de Recursos Humanos](docs/img/dashboard_rrhh.png)
+![Dashboard de Recursos Humanos, parte 2](docs/img/dashboard_rrhh_2.png)
 
 El script es idempotente: si se vuelve a ejecutar, actualiza los gráficos existentes en vez de duplicarlos. Busca los objetos listando la colección `TechNova` y no con el buscador de Metabase, que se indexa en segundo plano.
 
@@ -449,9 +449,6 @@ Cada mes llegan a RRHH tres tipos de Excel **hechos a mano**, con los problemas 
 | `fct_nominas` | Una fila por empleado y mes |
 | `rpt_productividad_vendedor` | Ventas por hora trabajada y por euro de coste de cada vendedor: cruza ventas (base de datos), horas (Excel de fichajes) y coste (Excel de nóminas) |
 | `rpt_rrhh_centro_mes` | Plantilla, horas, horas extra, absentismo y coste de personal frente a ventas por centro y mes |
-
-![Excel de fichajes tal como llega](docs/img/excel_rrhh_entrada.png)
-*Un Excel de fichajes tal como llega: título, celdas combinadas, semanas separadas, horas escritas de varias formas y fila de TOTAL.*
 
 Un test de dbt con severidad `warn` compara las horas extra que paga la gestoría con las fichadas, y avisa cuando no cuadran.
 
@@ -585,6 +582,7 @@ Un cuarto dashboard en Metabase muestra los segmentos (tamaño, gasto, ticket, p
 
 ![Dashboard de Machine Learning, parte 1](docs/img/dashboard_ml.png)
 ![Dashboard de Machine Learning, parte 2](docs/img/dashboard_ml_2.png)
+![Dashboard de Machine Learning, parte 3](docs/img/dashboard_ml_3.png)
 
 ---
 
