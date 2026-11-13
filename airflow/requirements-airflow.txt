@@ -4,3 +4,6 @@ Faker>=30.0
 pandas
 requests
 openpyxl>=3.1
+scikit-learn>=1.5
+matplotlib>=3.8
+joblib>=1.4

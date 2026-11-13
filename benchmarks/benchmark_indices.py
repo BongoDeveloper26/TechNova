@@ -38,9 +38,11 @@ CONSULTAS = [
      "SELECT * FROM cliente WHERE LOWER(email) = LOWER('Maria.Garcia@gmail.com')"),
     ("Devoluciones pendientes (índice parcial)",
      "SELECT * FROM devolucion WHERE estado = 'solicitada' ORDER BY fecha"),
-    ("Último pedido de cada cliente (subconsulta correlacionada)",
+    # Limitada a 2.000 clientes: sin índices recorre la tabla de pedidos UNA VEZ POR CLIENTE
+    # y con los 40.000 clientes tardaría más de 2 minutos en cada repetición
+    ("Último pedido de 2.000 clientes (subconsulta correlacionada)",
      "SELECT c.id_cliente, (SELECT MAX(p.fecha) FROM pedido p WHERE p.id_cliente = c.id_cliente) "
-     "FROM cliente c"),
+     "FROM cliente c WHERE c.id_cliente <= 2000"),
     ("Devoluciones de los pedidos de un cliente (3 JOIN)",
      "SELECT d.* FROM pedido pe JOIN linea_pedido l ON l.id_pedido = pe.id_pedido "
      "JOIN devolucion d ON d.id_linea = l.id_linea WHERE pe.id_cliente = 1234"),

@@ -45,8 +45,8 @@ services:
       # Dentro de Docker, PostgreSQL se llama "postgres" (no "localhost")
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      # Para que los DAGs encuentren los módulos del ETL
-      PYTHONPATH: /opt/technova/etl
+      # Para que los DAGs encuentren los módulos del ETL y de Machine Learning
+      PYTHONPATH: /opt/technova/etl:/opt/technova/ml
       # La imagen oficial comprueba la base de datos de Airflow ANTES de lanzar nuestro script,
       # pero esa base de datos la crea precisamente nuestro script. Desactivamos esa comprobación:
       # ya esperamos a PostgreSQL con el healthcheck y depends_on
@@ -69,6 +69,9 @@ services:
       - ./data:/opt/technova/data
       - ./logs:/opt/technova/logs
       - ./informes:/opt/technova/informes
+      - ./ml:/opt/technova/ml
+      - ./models:/opt/technova/models
+      - ./docs:/opt/technova/docs
     ports:
       - "8080:8080"
     depends_on:

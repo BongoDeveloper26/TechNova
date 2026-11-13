@@ -57,7 +57,15 @@ class Metabase:
         return self._llamar("GET", ruta, **kw)
 
     def post(self, ruta, datos):
-        return self._llamar("POST", ruta, json=datos)
+        # La base de datos interna de Metabase (H2) a veces se queda con el contador de ids
+        # desincronizado y propone un id que ya existe. Cada intento fallido lo hace avanzar,
+        # así que basta con reintentar hasta dar con un id libre.
+        for intento in range(20):
+            try:
+                return self._llamar("POST", ruta, json=datos)
+            except RuntimeError as error:
+                if "primary key violation" not in str(error).lower() or intento == 19:
+                    raise
 
     def put(self, ruta, datos):
         return self._llamar("PUT", ruta, json=datos)
@@ -110,25 +118,27 @@ class Metabase:
 # Base de datos y colección
 # ----------------------------------------------------------------------
 
+def datos_conexion():
+    return {
+        # Metabase está dentro de Docker: PostgreSQL se llama "postgres", no "localhost"
+        "host": "postgres",
+        "port": 5432,
+        "dbname": os.getenv("DW_DB", "technova_dw"),
+        "user": os.getenv("POSTGRES_USER"),
+        "password": os.getenv("POSTGRES_PASSWORD"),
+    }
+
+
 def conectar_base_de_datos(mb):
     respuesta = mb.get("database")
     lista = respuesta.get("data", []) if isinstance(respuesta, dict) else respuesta
     for bd in lista:
         if bd["name"] == NOMBRE_BD:
-            print(f"  Base de datos '{NOMBRE_BD}' ya conectada (id {bd['id']})")
+            # Se actualizan los datos de conexión por si ha cambiado la contraseña del .env
+            mb.put(f"database/{bd['id']}", {"engine": "postgres", "details": datos_conexion()})
+            print(f"  Base de datos '{NOMBRE_BD}' ya conectada (id {bd['id']}): conexión actualizada")
             return bd["id"]
-    bd = mb.post("database", {
-        "name": NOMBRE_BD,
-        "engine": "postgres",
-        "details": {
-            # Metabase está dentro de Docker: PostgreSQL se llama "postgres", no "localhost"
-            "host": "postgres",
-            "port": 5432,
-            "dbname": os.getenv("DW_DB", "technova_dw"),
-            "user": os.getenv("POSTGRES_USER"),
-            "password": os.getenv("POSTGRES_PASSWORD"),
-        },
-    })
+    bd = mb.post("database", {"name": NOMBRE_BD, "engine": "postgres", "details": datos_conexion()})
     print(f"  Base de datos '{NOMBRE_BD}' conectada (id {bd['id']})")
     return bd["id"]
 
@@ -160,7 +170,13 @@ def ajustes_visuales(tarjeta):
         else:
             ajustes["graph.dimensions"] = dimensiones
             ajustes["graph.metrics"] = metricas
-            ajustes["graph.show_values"] = tipo in ("bar", "row") and len(dimensiones) == 1
+            # Números encima de las barras solo si hay una única serie (si no, se amontonan)
+            ajustes["graph.show_values"] = tipo in ("bar", "row") and len(dimensiones) == 1 and len(metricas) == 1
+            # Un único eje Y aunque haya dos métricas (Metabase los separa por defecto)
+            ajustes["graph.y_axis.auto_split"] = False
+            # No agrupar las últimas categorías en una barra "Other"
+            ajustes["graph.max_categories_enabled"] = False
+            ajustes["graph.max_categories"] = 50   # las barras horizontales agrupan aunque se desactive
 
     for columna in tarjeta.get("euros", []):
         ajustes["column_settings"][f'["name","{columna}"]'] = {
@@ -189,6 +205,19 @@ def crear_o_actualizar_tarjeta(mb, tarjeta, id_bd, id_coleccion):
 # ----------------------------------------------------------------------
 # Dashboards
 # ----------------------------------------------------------------------
+
+def configurar_formato_espanol(mb):
+    """Números con formato español en toda la instancia: 1.234,56 en vez de 1,234.56."""
+    try:
+        mb.put("setting/custom-formatting", {"value": {
+            "type/Number": {"number_separators": ",."},     # coma decimal, punto de miles
+            "type/Currency": {"currency": "EUR"},
+        }})
+        print("  Formato de números: español (1.234,56)")
+    except RuntimeError as error:
+        # No es imprescindible: si esta versión de Metabase no lo admite, seguimos
+        print(f"  Aviso: no se pudo cambiar el formato de números ({error})")
+
 
 def crear_dashboard(mb, definicion, id_bd, id_coleccion):
     print(f"\n{definicion['nombre']}")
@@ -220,6 +249,7 @@ def main():
         mb.iniciar_sesion()
         id_bd = conectar_base_de_datos(mb)
         id_coleccion = preparar_coleccion(mb)
+        configurar_formato_espanol(mb)
         for definicion in DASHBOARDS:
             crear_dashboard(mb, definicion, id_bd, id_coleccion)
     except RuntimeError as error:

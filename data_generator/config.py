@@ -15,7 +15,7 @@ FECHA_INICIO = date(2023, 1, 1)
 FECHA_FIN = date(2025, 12, 31)
 
 # Tamaño de la simulación
-NUM_CLIENTES = 5000
+NUM_CLIENTES = 40000
 
 # Pedidos que hace de media un cliente al año (antes de aplicar la estacionalidad)
 PEDIDOS_POR_CLIENTE_ANIO = 2.5

@@ -97,10 +97,11 @@ GROUP BY p.categoria
 ORDER BY margen_pct DESC""",
         },
         # ---------------- Campañas ----------------
+        # Black Friday en dos gráficos: la facturación y el margen tienen escalas muy distintas
         {
-            "nombre": "Black Friday: facturación vs margen",
-            "tipo": "bar", "ejes": (["periodo"], ["facturacion", "margen"]), "euros": ["facturacion", "margen"],
-            "pos": (16, 0, 12, 6),
+            "nombre": "Black Friday: facturación",
+            "tipo": "bar", "ejes": (["anio", "periodo"], ["facturacion"]), "euros": ["facturacion"],
+            "pos": (16, 0, 6, 6),
             "sql": """
 WITH semanas AS (
     SELECT campania, fecha_inicio, fecha_fin
@@ -108,15 +109,34 @@ WITH semanas AS (
     WHERE campania = 'Black Friday'
 )
 SELECT
-    EXTRACT(YEAR FROM s.fecha_inicio)::int || ' - '
-      || CASE WHEN f.fecha >= s.fecha_inicio THEN 'Black Week' ELSE 'Semana anterior' END AS periodo,
-    ROUND(SUM(v.importe_neto), 0) AS facturacion,
-    ROUND(SUM(v.margen), 0)       AS margen
+    EXTRACT(YEAR FROM s.fecha_inicio)::int::text AS anio,
+    CASE WHEN f.fecha >= s.fecha_inicio THEN '2. Black Week' ELSE '1. Semana anterior' END AS periodo,
+    ROUND(SUM(v.importe_neto), 0) AS facturacion
 FROM semanas s
 JOIN marts.dim_fecha f  ON f.fecha BETWEEN s.fecha_inicio - 7 AND s.fecha_fin
 JOIN marts.fct_ventas v ON v.id_fecha = f.id_fecha
-GROUP BY 1
-ORDER BY MIN(f.fecha)""",
+GROUP BY 1, 2
+ORDER BY 1, 2""",
+        },
+        {
+            "nombre": "Black Friday: margen %",
+            "tipo": "bar", "ejes": (["anio", "periodo"], ["margen_pct"]), "porcentaje": ["margen_pct"],
+            "pos": (16, 6, 6, 6),
+            "sql": """
+WITH semanas AS (
+    SELECT campania, fecha_inicio, fecha_fin
+    FROM stg.stg_promociones
+    WHERE campania = 'Black Friday'
+)
+SELECT
+    EXTRACT(YEAR FROM s.fecha_inicio)::int::text AS anio,
+    CASE WHEN f.fecha >= s.fecha_inicio THEN '2. Black Week' ELSE '1. Semana anterior' END AS periodo,
+    ROUND(SUM(v.margen) / NULLIF(SUM(v.importe_neto), 0), 4) AS margen_pct
+FROM semanas s
+JOIN marts.dim_fecha f  ON f.fecha BETWEEN s.fecha_inicio - 7 AND s.fecha_fin
+JOIN marts.fct_ventas v ON v.id_fecha = f.id_fecha
+GROUP BY 1, 2
+ORDER BY 1, 2""",
         },
         {
             "nombre": "Pedidos por día de la semana y canal",
@@ -401,4 +421,121 @@ LIMIT 10""",
     ],
 }
 
-DASHBOARDS = [VENTAS, OPERACIONES, RRHH]
+# =====================================================================
+#  MACHINE LEARNING (Fase 8): lee los resultados del esquema ml
+# =====================================================================
+ML = {
+    "nombre": "TechNova - Machine Learning",
+    "descripcion": "Segmentación de clientes con K-Means y previsión de ventas a 3 meses (se reentrenan cada mes)",
+    "tarjetas": [
+        # ---------------- KPIs ----------------
+        {
+            "nombre": "Clientes segmentados",
+            "tipo": "scalar", "pos": (0, 0, 6, 3),
+            "sql": "SELECT COUNT(*) AS clientes FROM ml.segmento_cliente",
+        },
+        {
+            "nombre": "Gasto que concentra el segmento más valioso",
+            "tipo": "scalar", "porcentaje": ["pct_gasto"], "pos": (0, 6, 6, 3),
+            "sql": "SELECT pct_gasto FROM ml.segmento_resumen ORDER BY gasto_total DESC LIMIT 1",
+        },
+        {
+            "nombre": "Ventas previstas próximos 3 meses",
+            "tipo": "scalar", "euros": ["prevision"], "pos": (0, 12, 6, 3),
+            "sql": "SELECT ROUND(SUM(prevision)) AS prevision FROM ml.prevision_ventas",
+        },
+        {
+            "nombre": "Error mensual del modelo en el backtest",
+            "tipo": "scalar", "porcentaje": ["error_mensual"], "pos": (0, 18, 6, 3),
+            "sql": """
+SELECT ROUND(AVG(error_mensual), 4) AS error_mensual
+FROM ml.metricas_prevision WHERE elegido""",
+        },
+        # ---------------- Segmentación ----------------
+        {
+            "nombre": "Clientes por segmento (K-Means)",
+            "tipo": "pie", "ejes": (["segmento"], ["clientes"]), "pos": (3, 0, 8, 7),
+            "sql": "SELECT segmento, clientes FROM ml.segmento_resumen ORDER BY clientes DESC",
+        },
+        {
+            "nombre": "Gasto por segmento",
+            "tipo": "row", "ejes": (["segmento"], ["gasto_total"]), "euros": ["gasto_total"], "pos": (3, 8, 8, 7),
+            "sql": "SELECT segmento, gasto_total FROM ml.segmento_resumen ORDER BY gasto_total DESC",
+        },
+        {
+            "nombre": "Ticket medio por segmento",
+            "tipo": "bar", "ejes": (["segmento"], ["ticket_medio"]), "euros": ["ticket_medio"], "pos": (3, 16, 8, 7),
+            "sql": "SELECT segmento, ticket_medio FROM ml.segmento_resumen ORDER BY gasto_total DESC",
+        },
+        {
+            "nombre": "Perfil y acción recomendada por segmento",
+            "tipo": "table", "euros": ["gasto_medio", "ticket_medio"], "porcentaje": ["pct_clientes", "pct_web"],
+            "pos": (10, 0, 24, 6),
+            "sql": """
+SELECT segmento, clientes, pct_clientes, ROUND(recencia_media) AS dias_sin_comprar,
+       pedidos_medio, gasto_medio, ticket_medio, pct_web, descripcion, accion
+FROM ml.segmento_resumen
+ORDER BY gasto_total DESC""",
+        },
+        {
+            "nombre": "Segmentos K-Means frente a segmentos RFM",
+            "tipo": "bar", "ejes": (["segmento", "segmento_rfm"], ["clientes"]), "pos": (16, 0, 24, 7),
+            "sql": """
+SELECT segmento, segmento_rfm, COUNT(*) AS clientes
+FROM ml.segmento_cliente
+GROUP BY segmento, segmento_rfm
+ORDER BY segmento, segmento_rfm""",
+        },
+        # ---------------- Previsión ----------------
+        {
+            "nombre": "Ventas mensuales: real y previsión",
+            "tipo": "bar", "ejes": (["mes", "serie"], ["ventas"]), "euros": ["ventas"], "pos": (23, 0, 24, 7),
+            "sql": """
+SELECT to_char(date_trunc('month', dia), 'YYYY-MM') AS mes, 'Real' AS serie, ROUND(SUM(importe_neto)) AS ventas
+FROM marts.fct_ventas
+WHERE dia > (SELECT MAX(dia) FROM marts.fct_ventas) - INTERVAL '12 months'
+GROUP BY 1
+UNION ALL
+SELECT to_char(date_trunc('month', fecha), 'YYYY-MM'), 'Previsión', ROUND(SUM(prevision))
+FROM ml.prevision_ventas
+GROUP BY 1
+ORDER BY 1, 2""",
+        },
+        {
+            "nombre": "Previsión diaria con intervalo del 80 %",
+            "tipo": "line", "ejes": (["fecha"], ["prevision", "limite_inferior", "limite_superior"]),
+            "euros": ["prevision", "limite_inferior", "limite_superior"], "pos": (30, 0, 24, 7),
+            "sql": """
+SELECT fecha, SUM(prevision) AS prevision, SUM(limite_inferior) AS limite_inferior,
+       SUM(limite_superior) AS limite_superior
+FROM ml.prevision_ventas
+GROUP BY fecha
+ORDER BY fecha""",
+        },
+        {
+            "nombre": "Backtest: ventas semanales reales y previstas (último trimestre)",
+            "tipo": "line", "ejes": (["semana"], ["real", "combinado", "gradient_boosting", "anio_anterior",
+                                                  "media_4_semanas"]),
+            "euros": ["real", "combinado", "gradient_boosting", "anio_anterior", "media_4_semanas"],
+            "pos": (37, 0, 14, 7),
+            "sql": """
+SELECT date_trunc('week', fecha)::date AS semana, ROUND(SUM(real)) AS real, ROUND(SUM(combinado)) AS combinado,
+       ROUND(SUM(gradient_boosting)) AS gradient_boosting, ROUND(SUM(anio_anterior)) AS anio_anterior,
+       ROUND(SUM(media_4_semanas)) AS media_4_semanas
+FROM ml.backtest_ventas
+GROUP BY 1
+ORDER BY 1""",
+        },
+        {
+            "nombre": "Comparativa de modelos de previsión",
+            "tipo": "table", "porcentaje": ["wape", "error_mensual", "sesgo"], "pos": (37, 14, 10, 7),
+            "sql": """
+SELECT canal, modelo, wape, error_mensual, sesgo,
+       CASE WHEN elegido THEN 'Elegido' ELSE '' END AS elegido
+FROM ml.metricas_prevision
+ORDER BY canal, wape""",
+        },
+    ],
+}
+
+DASHBOARDS = [VENTAS, OPERACIONES, RRHH, ML]

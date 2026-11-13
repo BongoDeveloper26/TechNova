@@ -528,15 +528,15 @@ def hoja_portada_tienda(wb, tienda, mes, num_categorias, ultima_diaria, num_vend
     # Gráficos (leen los datos de las otras hojas)
     diaria = wb["Ventas diarias"]
     ws.add_chart(e.combinado(diaria, 1, 4, 5, 1, ultima_diaria, "Ventas diarias y media móvil de 7 días",
-                             ancho=14.6, alto=7.5, formato_barras='#,##0 "€"', formato_categorias="DD/MM"), "B16")
+                             ancho=13.2, alto=7.5, formato_barras='#,##0 "€"', formato_categorias="DD/MM"), "B16")
     if num_categorias:
         ws.add_chart(e.anillo(wb["Indicadores"], 10, 11, 6, 6 + num_categorias, "Ventas por categoría",
-                              ancho=14.6, alto=7.5), "H16")
+                              ancho=13.2, alto=7.5), "H16")
     ws.add_chart(e.barras(wb["Día de la semana"], 1, [4], 1, 8, "Venta media por día de la semana",
-                          ancho=14.6, alto=7.5, formato_eje='#,##0 "€"'), "B31")
+                          ancho=13.2, alto=7.5, formato_eje='#,##0 "€"'), "B31")
     comparativa = wb["Comparativa tiendas"]
     ws.add_chart(e.barras(comparativa, 1, [6], 1, ultima_comparativa,
-                          "Ventas por hora: posición en la cadena", horizontal=True, ancho=14.6, alto=7.5,
+                          "Ventas por hora: posición en la cadena", horizontal=True, ancho=13.2, alto=7.5,
                           formato_eje='#,##0 "€"', destacar=indice_comparativa), "H31")
 
     # Claves del mes: también con fórmulas (INDEX/MATCH buscan el nombre del máximo)
@@ -823,9 +823,9 @@ def hoja_ficha_centro(wb, centros, meses, mes):
     for col in "OPQR":
         ws.column_dimensions[col].hidden = True
     ws.add_chart(e.combinado(ws, 18, 17, 15, 36, ultima, "Coste de personal (barras) y horas extra (línea)",
-                             eje_secundario=True, ancho=14.6, alto=7.5, formato_barras='#,##0 "€"',
+                             eje_secundario=True, ancho=13.2, alto=7.5, formato_barras='#,##0 "€"',
                              formato_linea="#,##0"), "B18")
-    ws.add_chart(e.lineas(ws, 18, [16], 36, ultima, "Absentismo mes a mes", ancho=14.6, alto=7.5,
+    ws.add_chart(e.lineas(ws, 18, [16], 36, ultima, "Absentismo mes a mes", ancho=13.2, alto=7.5,
                           formato_eje="0.0%", colores=[e.ROJO]), "H18")
     e.preparar_impresion(ws, "Ficha de centro · Recursos Humanos", una_pagina=True)
     ws.print_area = f"A1:N{ultima + 1}"
@@ -997,13 +997,13 @@ def hoja_portada_rrhh(wb, mes, fila_tipos, num_tipos, ultima_evolucion, ultima_c
     evolucion = wb["Evolución"]
     ws.add_chart(e.combinado(evolucion, 1, 7, 4, 1, ultima_evolucion,
                              "Coste de personal (barras) y horas extra (línea)", eje_secundario=True,
-                             ancho=14.6, alto=7.5, formato_barras='#,##0 "€"', formato_linea="#,##0"), "B16")
+                             ancho=13.2, alto=7.5, formato_barras='#,##0 "€"', formato_linea="#,##0"), "B16")
     ws.add_chart(e.anillo(wb["Ausencias"], 10, 11, fila_tipos, fila_tipos + num_tipos,
-                          "Días de ausencia por tipo", ancho=14.6, alto=7.5), "H16")
+                          "Días de ausencia por tipo", ancho=13.2, alto=7.5), "H16")
     ws.add_chart(e.barras(wb["Centros"], 1, [10], 1, ultima_centros, "Absentismo por centro", horizontal=True,
-                          ancho=14.6, alto=7.5, formato_eje="0.0%"), "B31")
+                          ancho=13.2, alto=7.5, formato_eje="0.0%"), "B31")
     ws.add_chart(e.lineas(evolucion, 1, [6], 1, ultima_evolucion, "Absentismo en los últimos 12 meses",
-                          ancho=14.6, alto=7.5, formato_eje="0.0%", colores=[e.ROJO]), "H31")
+                          ancho=13.2, alto=7.5, formato_eje="0.0%", colores=[e.ROJO]), "H31")
     e.nota(ws, "B46", "Consejo: en la hoja 'Ficha de centro' puedes elegir un centro en el desplegable "
                       "y ver todos sus datos y su evolución.")
     e.preparar_impresion(ws, "Portada · Recursos Humanos", una_pagina=True)

@@ -39,7 +39,19 @@ flowchart LR
 | Orquestación | Apache Airflow 3.3 |
 | Transformación | dbt 1.11 (dbt-postgres) |
 | Visualización | Metabase 0.64 (LTS) |
-| Machine Learning | scikit-learn *(Fase 8)* |
+| Machine Learning | scikit-learn · pandas · matplotlib |
+
+---
+
+## Vista rápida
+
+| Dashboard de ventas (Metabase) | Machine Learning (Metabase) |
+|---|---|
+| ![Dashboard de ventas](docs/img/dashboard_ventas.png) | ![Dashboard de Machine Learning](docs/img/dashboard_ml.png) |
+| **ETL diario orquestado con Airflow** | **Informe Excel generado automáticamente** |
+| ![DAG del ETL](docs/img/airflow_etl.png) | ![Informe de tienda](docs/img/informe_tienda.png) |
+
+Cada sección incluye más capturas de su parte del proyecto.
 
 ---
 
@@ -65,6 +77,9 @@ flowchart LR
 - **Tiendas y almacenes en una sola tabla** `ubicacion` para que stock, empleados y compras apunten a una única entidad.
 - **`NUMERIC`** para importes (nunca `FLOAT`) y claves `GENERATED ALWAYS AS IDENTITY`.
 
+![Diagrama entidad-relación de la OLTP](docs/img/pgadmin_erd.png)
+*Diagrama entidad-relación de las 22 tablas, generado con pgAdmin.*
+
 ---
 
 ## Generador de datos
@@ -73,11 +88,12 @@ Simulación **reproducible** (semilla fija) de 3 años de actividad (2023-2025),
 
 | Dato | Volumen aprox. |
 |---|---|
-| Clientes / direcciones | 5.000 / 6.200 |
+| Clientes / direcciones | 40.000 / 49.800 |
 | Productos | 376 (20 marcas, 17 subcategorías) |
-| Pedidos / líneas | 18.800 / 28.500 |
-| Devoluciones / garantías | 1.400 / 100 |
-| Pedidos a proveedores | 560 |
+| Pedidos / líneas | 151.000 / 230.000 |
+| Devoluciones / garantías | 11.900 / 840 |
+| Pedidos a proveedores | 580 |
+| Facturación anual (2025) | 52 millones de euros |
 
 **Comportamientos realistas simulados**
 
@@ -114,10 +130,10 @@ Los índices redundantes se evitan aplicando la regla del prefijo izquierdo: si 
 
 | Consulta | Sin índices | Con índices | Mejora |
 |---|---:|---:|---:|
-| Último pedido de cada cliente (subconsulta correlacionada) | 2.815 ms | 8,5 ms | x330 |
-| Login por email (sin mayúsculas) | 1,69 ms | 0,01 ms | x113 |
-| Líneas vendidas de un producto | 1,38 ms | 0,01 ms | x115 |
-| Pagos de un pedido | 0,88 ms | 0,01 ms | x80 |
+| Último pedido de 2.000 clientes (subconsulta correlacionada) | 7.462 ms | 2,4 ms | x3.151 |
+| Login por email (sin mayúsculas) | 10,2 ms | < 0,01 ms | x2.045 |
+| Líneas vendidas de un producto | 6,9 ms | < 0,01 ms | x1.732 |
+| Pagos de un pedido | 4,8 ms | < 0,01 ms | x1.203 |
 
 Resultados completos en [`docs/benchmark_indices.md`](docs/benchmark_indices.md).
 
@@ -144,11 +160,11 @@ Esquema `reporting` (`sql/init/03_reporting.sql`) con vistas pensadas para anál
 
 ### Hallazgos destacados
 
-- **El Black Friday multiplica por 5 la facturación semanal, pero el margen cae del 20 % al 7 %.** Gana volumen y clientes nuevos a costa de rentabilidad.
+- **El Black Friday multiplica por 4 la facturación semanal, pero el margen cae a la mitad** (del 16,5 % al 8,5 % en 2025; en 2024 se quedó en un 1 %). Gana volumen y clientes nuevos a costa de rentabilidad.
 - **El 20 % de los clientes genera el 65 % de la facturación** y el 10 % de mejores clientes, casi la mitad.
-- **El 33 % del catálogo genera el 80 % de la facturación.**
-- **En la web se devuelve más del doble que en tienda** (6,7 % frente a 3 % de las líneas).
-- Un cliente tarda una mediana de 34 días en volver a comprar.
+- **El 27 % del catálogo genera el 80 % de la facturación.**
+- **En la web se devuelve más del doble que en tienda** (6,8 % frente a 3,1 % de las líneas).
+- Un cliente tarda una mediana de 33 días en volver a comprar.
 
 ---
 
@@ -259,7 +275,22 @@ flowchart LR
 
 Cada tarea pasa el identificador de la ejecución a la siguiente mediante **XCom**, de modo que todos los pasos de una noche quedan agrupados en una sola fila de `etl.ejecucion`.
 
-El DAG se ha probado con ejecuciones correctas, con un fallo de calidad forzado (stock negativo) y con la API de divisas caída: en los dos últimos casos las tareas dependientes no se ejecutan, la ejecución queda en `error` y el DAG en rojo.
+Un segundo DAG, `technova_ml`, reentrena los modelos de Machine Learning el día 1 de cada mes a las 05:00, cuando el ETL ya ha cargado el mes completo. Primero comprueba que el data warehouse está al día y después entrena la segmentación y la previsión en paralelo. Va en un DAG aparte porque tiene otro ritmo: los datos cambian cada día, pero reentrenar cada día no aporta nada.
+
+```mermaid
+flowchart LR
+    C[comprobar_datos] --> S[segmentar_clientes] --> R[resumen]
+    C --> P[prever_ventas] --> R
+```
+
+| DAG del ETL diario | DAG de Machine Learning |
+|---|---|
+| ![DAG technova_etl](docs/img/airflow_etl.png) | ![DAG technova_ml](docs/img/airflow_ml.png) |
+
+![Historial de ejecuciones en Airflow](docs/img/airflow_historial.png)
+*Historial de ejecuciones: cada columna es una noche y cada fila, una tarea.*
+
+El DAG del ETL se ha probado con ejecuciones correctas, con un fallo de calidad forzado (stock negativo) y con la API de divisas caída: en los dos últimos casos las tareas dependientes no se ejecutan, la ejecución queda en `error` y el DAG en rojo.
 
 ---
 
@@ -307,7 +338,7 @@ erDiagram
 
 | Técnica | Dónde | Para qué |
 |---|---|---|
-| Modelo incremental | `fct_ventas` | Solo recalcula los últimos 60 días cada noche (unas 5.500 filas en vez de 28.000), suficiente para recoger devoluciones tardías |
+| Modelo incremental | `fct_ventas` | Solo recalcula los últimos 60 días cada noche (unas 43.000 filas en vez de 225.000), suficiente para recoger devoluciones tardías |
 | Snapshot (SCD tipo 2) | `snp_clientes` | Guarda cada cambio de nivel de un cliente con su `dbt_valid_from` y `dbt_valid_to`, para saber en qué nivel estaba en cualquier fecha |
 | Seed | `festivos_nacionales` | Datos de referencia versionados en Git |
 | Calendario generado con SQL | `dim_fecha` | `generate_series` más festivos y campañas |
@@ -335,11 +366,17 @@ python etl/transformar_dbt.py docs serve --port 8081
 
 Genera una web con la descripción de cada modelo y columna y el gráfico de linaje (de qué tabla sale cada tabla).
 
+![Gráfico de linaje de dbt](docs/img/dbt_lineage.png)
+*Linaje: de las tablas de staging (verde) a los modelos de staging, intermedios y marts.*
+
+![Documentación de un modelo de dbt](docs/img/dbt_modelo.png)
+*Ficha de un modelo en la documentación: descripción, columnas, tests y SQL.*
+
 ---
 
 ## Dashboards con Metabase
 
-Tres dashboards en **Metabase** (herramienta de BI de código abierto) que leen directamente el esquema en estrella. Se crean **desde código**: están definidos en `dashboard/dashboards.py` y `dashboard/crear_dashboard.py` los construye a través de la API de Metabase, así que cualquiera que clone el repositorio obtiene exactamente los mismos dashboards con un comando.
+Cuatro dashboards en **Metabase** (herramienta de BI de código abierto) que leen directamente el esquema en estrella. Se crean **desde código**: están definidos en `dashboard/dashboards.py` y `dashboard/crear_dashboard.py` los construye a través de la API de Metabase, así que cualquiera que clone el repositorio obtiene exactamente los mismos dashboards con un comando.
 
 ### TechNova - Ventas y clientes
 
@@ -348,11 +385,14 @@ Tres dashboards en **Metabase** (herramienta de BI de código abierto) que leen 
 | Facturación neta, pedidos, ticket medio y margen bruto del último año | Indicadores |
 | Facturación neta mensual por canal (web y tienda) | Líneas |
 | Facturación y margen por categoría | Barras |
-| Black Friday: facturación y margen frente a la semana anterior | Barras |
+| Black Friday: facturación y margen % de la Black Week frente a la semana anterior | Barras |
 | Pedidos por día de la semana y canal | Barras |
 | Clientes y facturación por segmento RFM | Tarta y barras |
 | Clientes por rango de edad | Barras |
 | Top 10 productos por facturación | Tabla |
+
+![Dashboard de ventas, parte 1](docs/img/dashboard_ventas.png)
+![Dashboard de ventas, parte 2](docs/img/dashboard_ventas_2.png)
 
 ### TechNova - Operaciones
 
@@ -366,6 +406,15 @@ Tres dashboards en **Metabase** (herramienta de BI de código abierto) que leen 
 | Últimas ejecuciones del ETL y filas rechazadas por motivo | Tabla y barras |
 
 La última fila convierte el dashboard en un **monitor del propio pipeline**: muestra cuándo se ejecutó el ETL, cuánto tardó y qué rechazó.
+
+![Dashboard de operaciones, parte 1](docs/img/dashboard_operaciones.png)
+![Dashboard de operaciones, parte 2: monitor del pipeline](docs/img/dashboard_operaciones_2.png)
+
+### TechNova - Recursos Humanos
+
+Plantilla, horas extra, absentismo y coste de personal del último mes, su evolución, el absentismo por centro, las ventas por hora trabajada de cada tienda y el top 10 de vendedores (se explica en [Excel de Recursos Humanos](#excel-de-recursos-humanos)).
+
+![Dashboard de Recursos Humanos](docs/img/dashboard_rrhh.png)
 
 El script es idempotente: si se vuelve a ejecutar, actualiza los gráficos existentes en vez de duplicarlos. Busca los objetos listando la colección `TechNova` y no con el buscador de Metabase, que se indexa en segundo plano.
 
@@ -401,6 +450,9 @@ Cada mes llegan a RRHH tres tipos de Excel **hechos a mano**, con los problemas 
 | `rpt_productividad_vendedor` | Ventas por hora trabajada y por euro de coste de cada vendedor: cruza ventas (base de datos), horas (Excel de fichajes) y coste (Excel de nóminas) |
 | `rpt_rrhh_centro_mes` | Plantilla, horas, horas extra, absentismo y coste de personal frente a ventas por centro y mes |
 
+![Excel de fichajes tal como llega](docs/img/excel_rrhh_entrada.png)
+*Un Excel de fichajes tal como llega: título, celdas combinadas, semanas separadas, horas escritas de varias formas y fila de TOTAL.*
+
 Un test de dbt con severidad `warn` compara las horas extra que paga la gestoría con las fichadas, y avisa cuando no cuadran.
 
 En Airflow, la tarea `rrhh` se ejecuta en paralelo con proveedores, y los Excel de cada mes llegan el último día del mes.
@@ -409,16 +461,130 @@ En Airflow, la tarea `rrhh` se ejecuta en paralelo con proveedores, y los Excel 
 
 ## Informes automáticos en Excel
 
-El camino contrario: `etl/informes_excel.py` genera cada fin de mes **informes en Excel listos para enviar**, a partir del data warehouse. Son 10 ficheros en `informes/<AAAA-MM>/`.
+El camino contrario: `etl/informes_excel.py` genera cada fin de mes **informes en Excel listos para enviar**, a partir del data warehouse. Son 10 ficheros en `informes/<AAAA-MM>/`. El aspecto (colores, tarjetas, tablas, gráficos, impresión) está separado en `etl/excel_estilos.py`.
 
-| Informe | Para quién | Hojas |
-|---|---|---|
-| `informe_tienda_<tienda>_<mes>.xlsx` (uno por tienda) | El encargado de cada tienda | **Resumen**: indicadores del mes frente al anterior, con la variación en verde o rojo según sea buena o mala, y gráfico de ventas por categoría. **Vendedores**: tabla con filtros, ranking y barras de datos en ventas por hora. **Ventas diarias**: con media móvil de 7 días y gráfico de líneas. **Top productos** |
-| `informe_rrhh_<mes>.xlsx` | Recursos Humanos | **Centros**: plantilla, horas, absentismo y coste, con alerta en rojo si el absentismo supera el 3 % y escala de color en horas extra. **Horas extra**: top 20. **Ausencias** del mes. **Evolución**: 12 meses con gráficos |
+### Informe de tienda (uno por tienda, para su encargado)
 
-Los valores derivados (ticket medio, variaciones, ventas por hora, ranking, medias móviles, totales) se escriben como **fórmulas de Excel**, no como números: si alguien corrige un dato, todo se recalcula. Se ha comprobado con LibreOffice que ninguna fórmula de los 10 informes da error.
+| Hoja | Contenido |
+|---|---|
+| Portada | Cuadro de mando: 8 tarjetas de indicadores con su variación frente al mes anterior (flecha verde o roja según sea buena o mala), 4 gráficos y las "claves del mes" |
+| Indicadores | 12 indicadores frente al mes anterior, al mismo mes del año pasado y al objetivo, con semáforo de cumplimiento |
+| Objetivos | Objetivos y parámetros **editables** (celdas amarillas, con validación de datos y hoja protegida). Se proponen a partir del mismo mes del año anterior |
+| Vendedores | Ranking, podio resaltado, barras de datos y retribución variable (comisión y bonus) calculada con los parámetros de la hoja Objetivos |
+| Ventas diarias | Media móvil de 7 días, acumulado del mes y ritmo frente al objetivo; fines de semana sombreados |
+| Día de la semana | Venta media por día de la semana con `SUMIFS` y `COUNTIFS` sobre las ventas diarias |
+| Top productos | Los 10 más vendidos y gráfico de Pareto (barras más % acumulado en un segundo eje) |
+| Comparativa tiendas | La tienda frente al resto de la cadena, resaltada en la tabla y en el gráfico |
+
+![Portada del informe de tienda](docs/img/informe_tienda.png)
+*Portada: tarjetas de indicadores con su variación, gráficos y claves del mes.*
+
+| Indicadores con semáforo de cumplimiento | Vendedores con comisiones y podio |
+|---|---|
+| ![Hoja de indicadores](docs/img/informe_tienda_indicadores.png) | ![Hoja de vendedores](docs/img/informe_tienda_vendedores.png) |
+
+### Informe de Recursos Humanos
+
+| Hoja | Contenido |
+|---|---|
+| Portada | Cuadro de mando de toda la empresa con variaciones, evolución y ausencias por tipo |
+| Centros | Indicadores por centro con alerta según un umbral de absentismo editable |
+| Ficha de centro | **Hoja interactiva**: se elige un centro en un desplegable y las tarjetas, la tabla de 12 meses y los gráficos se recalculan |
+| Horas extra | Conciliación de horas fichadas por precio pactado frente a lo pagado en nómina, con el estado de cada empleado |
+| Ausencias | Detalle del mes y matriz centro por tipo de ausencia hecha con `SUMIFS` |
+| Evolución | Últimos 12 meses, calculados con fórmulas sobre la hoja Datos |
+| Parámetros y Datos | Umbrales y precios editables, y los datos de origen con nombres definidos (`DatosMes`, `DatosCentro`...) |
+
+| Ficha de centro con selector desplegable | Conciliación de horas extra con la nómina |
+|---|---|
+| ![Ficha de centro interactiva](docs/img/informe_rrhh.png) | ![Conciliación de horas extra](docs/img/informe_rrhh_horas_extra.png) |
+
+Todo lo derivado (ticket medio, variaciones, cumplimientos, comisiones, acumulados, rankings, matrices y totales) se escribe como **fórmulas de Excel**, no como números: si alguien cambia un objetivo, un parámetro o un dato, el libro entero se recalcula. Técnicas usadas: `SUMIFS`, `COUNTIFS`, `INDEX`/`MATCH`, `RANK`, `EOMONTH`, nombres definidos, validación de datos con lista desplegable, formato condicional (escalas de color, barras de datos, iconos de semáforo y reglas con fórmula), gráficos combinados con eje secundario, protección de hoja y configuración de impresión. Se ha comprobado con LibreOffice que ninguna fórmula de los 10 informes da error y que la hoja interactiva y los objetivos editables recalculan correctamente.
 
 Además, un tercer dashboard en Metabase, **TechNova - Recursos Humanos**, muestra plantilla, horas extra, absentismo y coste de personal del último mes, su evolución, el absentismo por centro, las ventas por hora trabajada de cada tienda y el top 10 de vendedores.
+
+---
+
+## Machine Learning
+
+Dos modelos con **scikit-learn** que leen del esquema en estrella y escriben sus resultados en el esquema `ml` del data warehouse, para que Metabase y cualquier consulta SQL puedan usarlos. Se reentrenan solos una vez al mes con el DAG `technova_ml`, y cada entrenamiento queda registrado en `ml.ejecucion` con sus parámetros y métricas.
+
+### Segmentación de clientes con K-Means
+
+La segmentación RFM de dbt usa **reglas escritas a mano** ("si R >= 4 y F >= 4 y M >= 4, Campeones"). Aquí es al revés: el algoritmo recibe 6 características de cada cliente y encuentra solo los grupos de clientes parecidos (aprendizaje **no supervisado**).
+
+| Paso | Detalle |
+|---|---|
+| Variables | Días sin comprar, pedidos, gasto neto, ticket medio, % de pedidos en la web y tasa de devolución |
+| Preparación | Logaritmo en las variables muy asimétricas y estandarización (`ColumnTransformer` + `StandardScaler`): K-Means mide distancias y, sin escalar, el gasto en euros aplastaría al resto |
+| Elección de k | Método del codo y coeficiente de silueta para k de 2 a 9, eligiendo entre 4 y 6 (menos grupos no sirven para marketing y más son difíciles de manejar) |
+| Nombres | Cada grupo recibe un nombre según lo que más destaca de su centroide, con una descripción y una acción recomendada |
+| Salida | `ml.segmento_cliente` (un segmento por cliente), `ml.segmento_resumen` y el modelo en `models/segmentacion_kmeans.joblib` |
+
+Resultado con los datos del generador: **30.675 clientes con compras en 5 segmentos** (silueta 0,24).
+
+| Segmento | Clientes | % de los clientes | % del gasto |
+|---|---:|---:|---:|
+| VIP | 7.617 | 24,8 % | 61,9 % |
+| Alto ticket ocasional | 12.024 | 39,2 % | 34,3 % |
+| De tienda ocasionales | 4.490 | 14,6 % | 1,9 % |
+| Digitales de bajo gasto | 5.371 | 17,5 % | 1,2 % |
+| Devuelven mucho | 1.173 | 3,8 % | 0,6 % |
+
+El perfil completo de cada segmento (días sin comprar, pedidos, ticket medio, % web y devoluciones) está en el mapa de calor de abajo y en el dashboard de Machine Learning.
+
+La cuarta parte de los clientes genera el 62 % del gasto. Además, K-Means encuentra grupos que las reglas RFM no pueden ver, porque RFM no mira el canal ni las devoluciones: los clientes que devuelven mucho o los que solo compran en la web.
+
+![Elección de k](docs/ml/01_eleccion_k.png)
+![Perfil de los segmentos](docs/ml/03_perfil_segmentos.png)
+![Mapa de clientes](docs/ml/02_mapa_segmentos.png)
+
+### Previsión de ventas
+
+Aprendizaje **supervisado** (regresión): prevé las ventas diarias de los próximos 3 meses para la web y para las tiendas.
+
+La clave es **no hacer trampas con el tiempo**. Para prever un día que está a 92 días vista solo se puede usar lo que se sabía 92 días antes. Por eso el "nivel" de ventas de cada día es la media de los 28 días que terminan 92 días antes, y el modelo aprende el cociente entre las ventas del día y ese nivel. Así, además, el modelo no tiene que extrapolar el crecimiento de la empresa, algo que los árboles de decisión no saben hacer.
+
+La validación es **temporal y en tres tramos**, para no elegir nada mirando el periodo con el que se evalúa:
+
+```
+|---------------- entrenamiento ----------------|-- validación --|-- test (backtest) --|
+                                                   jul-sep 2025      oct-dic 2025
+```
+
+- En la **validación** se elige cuánto pesan los días recientes (la vida media de los pesos: 365, 180, 90 o 45 días, o todos igual). TechNova crece cada vez más despacio (x4,8 en 2023, x1,8 en 2025), y lo de hace dos años se parece poco a lo de ahora: con pesos de 90 días de vida media, el error del Gradient Boosting baja casi a la mitad.
+- En el **test** se comparan 4 modelos con lo que pasó de verdad y se elige el mejor para cada canal.
+
+| Modelo | Cómo prevé |
+|---|---|
+| `media_4_semanas` | Media de los 4 últimos días iguales (lunes con lunes). Modelo ingenuo |
+| `anio_anterior` | El mismo día del año pasado por el crecimiento de los últimos 3 meses. Modelo ingenuo |
+| `gradient_boosting` | `HistGradientBoostingRegressor` con día de la semana, mes, día del mes, festivos (seed de dbt), distancia al Black Friday y a Navidad |
+| `combinado` | Media de los dos anteriores (*ensemble*: sus errores se compensan) |
+
+| Canal | Modelo | Error diario (WAPE) | Error mensual | Sesgo |
+|---|---|---:|---:|---:|
+| Web | **combinado** (elegido) | 15,5 % | 6,2 % | +2,6 % |
+| Web | gradient_boosting | 16,2 % | 8,4 % | +5,6 % |
+| Web | anio_anterior | 18,0 % | 4,1 % | -0,4 % |
+| Web | media_4_semanas | 39,7 % | 34,9 % | -33,2 % |
+| Tienda | **combinado** (elegido) | 19,0 % | 3,5 % | -0,7 % |
+| Tienda | gradient_boosting | 19,3 % | 3,8 % | +3,0 % |
+| Tienda | anio_anterior | 21,2 % | 4,4 % | -4,3 % |
+| Tienda | media_4_semanas | 38,2 % | 30,5 % | -32,9 % |
+
+Para cada canal se elige el modelo con menor error diario (WAPE). En los dos canales gana el **combinado**: el Gradient Boosting acierta mejor el día a día (festivos, Black Friday, día de la semana) y el modelo del año anterior corrige su tendencia a pasarse, así que la media de los dos es mejor que cada uno por separado. En el total de cada mes, el error del modelo elegido es del 6 % en la web y del 3,5 % en las tiendas. Cada previsión lleva un **intervalo del 80 %**, calculado a partir de los errores del backtest.
+
+![Backtest de los modelos](docs/ml/05_backtest_modelos.png)
+![Previsión mensual](docs/ml/06_prevision_mensual.png)
+![Previsión diaria con intervalo](docs/ml/07_prevision_diaria.png)
+
+### Dashboard TechNova - Machine Learning
+
+Un cuarto dashboard en Metabase muestra los segmentos (tamaño, gasto, ticket, perfil y acción recomendada), la comparación de K-Means con los segmentos RFM, la previsión mensual y diaria con su intervalo, el backtest y la comparativa de modelos.
+
+![Dashboard de Machine Learning, parte 1](docs/img/dashboard_ml.png)
+![Dashboard de Machine Learning, parte 2](docs/img/dashboard_ml_2.png)
 
 ---
 
@@ -428,39 +594,44 @@ Además, un tercer dashboard en Metabase, **TechNova - Recursos Humanos**, muest
 
 ```bash
 # 1. Clonar y configurar
-git clone https://github.com/TU_USUARIO/technova-data-platform.git
-cd technova-data-platform
+git clone https://github.com/BongoDeveloper26/TechNova.git
+cd TechNova
 cp .env.example .env            # y edita las contraseñas
 
-# 2. Levantar PostgreSQL + pgAdmin (crea las 22 tablas automáticamente)
-docker compose up -d
+# 2. Levantar PostgreSQL, pgAdmin, Airflow y Metabase
+docker compose up -d --build
 
-# 3. Generar los datos
+# 3. Entorno virtual de Python
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python data_generator/main.py
 
-# 4. (Opcional) Medir el efecto de los índices
-python benchmarks/benchmark_indices.py
+# 4. Generarlo todo desde cero con un solo comando (unos 2 minutos):
+#    datos simulados, ficheros de proveedores y RRHH, ETL + dbt, informes Excel y modelos de ML
+python scripts/reiniciar_todo.py --si
 
-# 5. Simular los ficheros de proveedores y los Excel de RRHH, y lanzar el ETL a mano (incluye dbt)
-python etl/simular_proveedores.py --desde 2025-12-01 --hasta 2025-12-31
-python etl/simular_rrhh.py --desde 2025-01 --hasta 2025-12
-python etl/run_etl.py --fecha 2025-12-31
-
-# 6. (Opcional) Documentación de dbt en http://localhost:8081
-python etl/transformar_dbt.py docs generate
-python etl/transformar_dbt.py docs serve --port 8081
-
-# 7. Crear los dashboards en Metabase
+# 5. Crear los dashboards en Metabase
 python dashboard/crear_dashboard.py
-
-# 8. Generar los informes Excel de un mes
-python etl/informes_excel.py --mes 2025-12
 ```
 
-El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera vez tarda unos minutos en construir su imagen. Al entrar en la web, hay que activar el DAG `technova_etl` (los DAG nuevos empiezan en pausa).
+Cada paso de `reiniciar_todo.py` también se puede lanzar por separado:
+
+| Paso | Comando |
+|---|---|
+| Generar los datos | `python data_generator/main.py` |
+| Simular los ficheros externos | `python etl/simular_proveedores.py --desde 2025-12-01 --hasta 2025-12-31` y `python etl/simular_rrhh.py --desde 2025-01 --hasta 2025-12` |
+| ETL completo (incluye dbt) | `python etl/run_etl.py --fecha 2025-12-31` |
+| Informes Excel de un mes | `python etl/informes_excel.py --mes 2025-12` |
+| Modelos de Machine Learning | `python ml/segmentacion_clientes.py` y `python ml/prevision_ventas.py` |
+| Benchmark de índices (opcional, unos 2 minutos) | `python benchmarks/benchmark_indices.py` |
+| Documentación de dbt en http://localhost:8081 (opcional) | `python etl/transformar_dbt.py docs generate` y `python etl/transformar_dbt.py docs serve --port 8081` |
+
+![Salida de reiniciar_todo.py](docs/img/reinicio_terminal.png)
+*Final de la salida de `reiniciar_todo.py`: todo el proyecto regenerado desde cero.*
+
+Para cambiar el tamaño de la simulación basta con editar `NUM_CLIENTES` en `data_generator/config.py` y volver a ejecutar `reiniciar_todo.py`.
+
+El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera vez tarda unos minutos en construir su imagen. Al entrar en la web, hay que activar los DAG `technova_etl` y `technova_ml` (los DAG nuevos empiezan en pausa).
 
 | Servicio | URL |
 |---|---|
@@ -476,13 +647,17 @@ El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera 
 ```
 technova-data-platform/
 ├── docker-compose.yml          # PostgreSQL, pgAdmin, Airflow y Metabase
-├── requirements.txt
+├── requirements.txt            # librerías de Python para ejecutar en local
+├── .env.example                # plantilla de las variables de entorno
+├── scripts/
+│   └── reiniciar_todo.py       # borra todo y lo regenera desde cero con un comando
 ├── airflow/
 │   ├── Dockerfile              # imagen oficial + librerías del ETL
 │   ├── requirements-airflow.txt
 │   ├── arrancar.sh             # crea la base de datos de Airflow y lo arranca
 │   └── dags/
-│       └── technova_etl.py     # DAG diario del ETL
+│       ├── technova_etl.py     # DAG diario del ETL
+│       └── technova_ml.py      # DAG mensual de Machine Learning
 ├── sql/
 │   ├── init/                   # se ejecutan solos al crear la base de datos OLTP
 │   │   ├── 01_schema.sql       # esquema OLTP (22 tablas)
@@ -493,7 +668,8 @@ technova-data-platform/
 │   │   ├── 02_clientes.sql
 │   │   └── 03_operaciones.sql
 │   └── dw/
-│       └── 01_dw_schema.sql    # esquemas staging y etl del DW
+│       ├── 01_dw_schema.sql    # esquemas staging y etl del DW
+│       └── 02_ml_schema.sql    # esquema ml (resultados de los modelos)
 ├── data_generator/             # simulación de datos
 │   ├── main.py                 # ejecuta todo en orden
 │   ├── config.py               # parámetros de la simulación
@@ -513,12 +689,17 @@ technova-data-platform/
 │   ├── proveedores.py          # CSV -> staging
 │   ├── excel_rrhh.py           # Excel de RRHH -> staging
 │   ├── informes_excel.py       # data warehouse -> informes Excel
+│   ├── excel_estilos.py        # estilos, tarjetas y gráficos de los informes Excel
 │   ├── calidad.py              # controles de calidad
 │   ├── transformar_dbt.py      # lanza dbt y resume sus resultados
 │   ├── simular_proveedores.py  # genera los CSV (simula el exterior)
 │   └── simular_rrhh.py         # genera los Excel de RRHH (simula el exterior)
+├── ml/
+│   ├── comun.py                # conexión, registro de entrenamientos y gráficos
+│   ├── segmentacion_clientes.py # K-Means
+│   └── prevision_ventas.py     # backtest de 4 modelos y previsión a 3 meses
 ├── dashboard/
-│   ├── dashboards.py           # definición de los 3 dashboards y sus 33 gráficos
+│   ├── dashboards.py           # definición de los 4 dashboards y sus 47 gráficos
 │   └── crear_dashboard.py      # los crea en Metabase con su API
 ├── benchmarks/
 │   └── benchmark_indices.py
@@ -536,8 +717,11 @@ technova-data-platform/
 ├── data/                       # ficheros de proveedores (no se sube a Git)
 ├── logs/                       # logs del ETL (no se sube a Git)
 ├── informes/                   # informes Excel generados (no se sube a Git)
+├── models/                     # modelos entrenados .joblib (no se sube a Git)
 └── docs/
-    └── benchmark_indices.md
+    ├── benchmark_indices.md
+    ├── img/                    # capturas del README
+    └── ml/                     # gráficos de los modelos
 ```
 
 ---
@@ -553,4 +737,5 @@ technova-data-platform/
 - [x] **Fase 6** — Dashboards de negocio con Metabase
 - [x] **Fase 7a** — ETL de Excel de Recursos Humanos
 - [x] **Fase 7b** — Informes automáticos en Excel y dashboard de RRHH
-- [ ] **Fase 8** — Machine Learning
+- [x] **Fase 8** — Machine Learning: segmentación de clientes y previsión de ventas
+- [x] **Fase final** — 40.000 clientes simulados, script de reinicio completo y capturas

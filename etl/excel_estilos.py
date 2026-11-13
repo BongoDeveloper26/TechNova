@@ -12,7 +12,8 @@ from datetime import datetime
 from openpyxl.chart import BarChart, DoughnutChart, LineChart, Reference
 from openpyxl.chart.label import DataLabelList
 from openpyxl.chart.series import DataPoint
-from openpyxl.drawing.text import CharacterProperties, ParagraphProperties
+from openpyxl.chart.text import RichText
+from openpyxl.drawing.text import CharacterProperties, Paragraph, ParagraphProperties
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
 from openpyxl.utils import get_column_letter
@@ -76,6 +77,7 @@ def propiedades(wb, titulo, asunto):
     wb.properties.title = titulo
     wb.properties.subject = asunto
     wb.properties.keywords = "TechNova, informe mensual, generado automáticamente"
+    wb.calculation.fullCalcOnLoad = True   # que Excel recalcule todas las fórmulas al abrir
 
 
 def nombre_definido(wb, nombre, hoja, celda):
@@ -293,10 +295,33 @@ def preparar_impresion(ws, titulo, filas_repetidas=None, una_pagina=False):
 # Gráficos
 # ---------------------------------------------------------------------
 
+def _texto_pequeno(eje, tamano=800):
+    """Etiquetas de los ejes en 8 pt: así Excel no las gira ni las amontona."""
+    propiedades = CharacterProperties(sz=tamano, solidFill="595959")
+    eje.txPr = RichText(p=[Paragraph(pPr=ParagraphProperties(defRPr=propiedades), endParaRPr=propiedades)])
+
+
 def _ejes_visibles(grafico):
     # openpyxl 3.1 marca los ejes como ocultos por defecto: hay que mostrarlos a mano
     grafico.x_axis.delete = False
     grafico.y_axis.delete = False
+    _texto_pequeno(grafico.x_axis)
+    _texto_pequeno(grafico.y_axis)
+
+
+def _sin_solapes(grafico):
+    """Título y leyenda FUERA del área del gráfico (si no, Excel los pinta encima de las barras)."""
+    grafico.title.overlay = False
+    # Un color por SERIE, no por punto: si no, Excel pone en la leyenda cada mes por separado
+    if not isinstance(grafico, DoughnutChart):
+        grafico.varyColors = False
+    # Con una sola serie la leyenda no aporta nada (el título ya dice qué es)
+    if (grafico.legend is not None and not isinstance(grafico, DoughnutChart)
+            and len(grafico.series) == 1 and len(grafico._charts) == 1):
+        grafico.legend = None
+    if grafico.legend is not None:
+        grafico.legend.overlay = False
+    return grafico
 
 
 def _color_serie(serie, color, linea=False):
@@ -343,6 +368,8 @@ def barras(ws_datos, col_categorias, cols_valores, fila_cabecera, ultima_fila, t
     g.y_axis.majorGridlines = None if horizontal else g.y_axis.majorGridlines
     if horizontal:
         g.x_axis.scaling.orientation = "maxMin"   # la primera fila arriba
+        g.y_axis.delete = True                    # el valor ya va en la etiqueta de cada barra
+        etiquetas = True
     if etiquetas:
         g.dataLabels = DataLabelList()
         g.dataLabels.showVal = True
@@ -353,7 +380,7 @@ def barras(ws_datos, col_categorias, cols_valores, fila_cabecera, ultima_fila, t
         g.legend = None
     else:
         g.legend.position = "b"
-    return g
+    return _sin_solapes(g)
 
 
 def lineas(ws_datos, col_categorias, cols_valores, fila_cabecera, ultima_fila, titulo,
@@ -371,7 +398,7 @@ def lineas(ws_datos, col_categorias, cols_valores, fila_cabecera, ultima_fila, t
     if formato_categorias:
         g.x_axis.number_format = formato_categorias
     g.legend.position = "b"
-    return g
+    return _sin_solapes(g)
 
 
 def combinado(ws_datos, col_categorias, col_barras, col_linea, fila_cabecera, ultima_fila, titulo,
@@ -402,9 +429,10 @@ def combinado(ws_datos, col_categorias, col_barras, col_linea, fila_cabecera, ul
         l.y_axis.majorGridlines = None
         if formato_linea:
             l.y_axis.number_format = formato_linea
+        _texto_pequeno(l.y_axis)
     b += l
     b.legend.position = "b"
-    return b
+    return _sin_solapes(b)
 
 
 def anillo(ws_datos, col_categorias, col_valores, fila_cabecera, ultima_fila, titulo, ancho=11, alto=7.5):
@@ -423,4 +451,4 @@ def anillo(ws_datos, col_categorias, col_valores, fila_cabecera, ultima_fila, ti
     g.dataLabels.showVal = g.dataLabels.showCatName = g.dataLabels.showSerName = False
     g.dataLabels.showLeaderLines = False
     g.legend.position = "r"
-    return g
+    return _sin_solapes(g)
