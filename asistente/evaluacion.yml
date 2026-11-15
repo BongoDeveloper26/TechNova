@@ -1,0 +1,83 @@
+# Conjunto de evaluación del asistente: preguntas con su SQL de referencia (escrito a mano).
+# evaluar.py ejecuta las dos consultas (la del LLM y la de referencia) y compara los RESULTADOS,
+# no el texto del SQL: hay muchas formas correctas de escribir la misma consulta.
+
+- pregunta: ¿Cuánto facturó TechNova en total en 2025?
+  sql: |
+    SELECT ROUND(SUM(importe_neto), 2) FROM marts.fct_ventas
+    WHERE dia BETWEEN '2025-01-01' AND '2025-12-31'
+
+- pregunta: ¿Qué tienda vendió más en noviembre de 2025?
+  sql: |
+    SELECT u.ubicacion, ROUND(SUM(v.importe_neto), 2)
+    FROM marts.fct_ventas v JOIN marts.dim_ubicacion u ON u.id_ubicacion = v.id_ubicacion
+    WHERE v.canal = 'tienda' AND v.dia BETWEEN '2025-11-01' AND '2025-11-30'
+    GROUP BY u.ubicacion ORDER BY 2 DESC LIMIT 1
+
+- pregunta: ¿Cuál fue el ticket medio de la web en 2025?
+  sql: |
+    SELECT ROUND(SUM(importe_neto) / COUNT(DISTINCT id_pedido), 2) FROM marts.fct_ventas
+    WHERE canal = 'web' AND dia BETWEEN '2025-01-01' AND '2025-12-31'
+
+- pregunta: Facturación de cada categoría de producto en 2025, de mayor a menor
+  sql: |
+    SELECT p.categoria, ROUND(SUM(v.importe_neto), 2)
+    FROM marts.fct_ventas v JOIN marts.dim_producto p ON p.id_producto = v.id_producto
+    WHERE v.dia BETWEEN '2025-01-01' AND '2025-12-31'
+    GROUP BY p.categoria ORDER BY 2 DESC
+
+- pregunta: ¿Cuántos pedidos se cancelaron en 2025?
+  sql: |
+    SELECT COUNT(*) FROM marts.fct_pedidos
+    WHERE estado = 'cancelado' AND fecha_pedido >= '2025-01-01' AND fecha_pedido < '2026-01-01'
+
+- pregunta: ¿Qué método de pago se usa más en los pedidos de la web?
+  sql: |
+    SELECT metodo_pago, COUNT(*) FROM marts.fct_pedidos
+    WHERE canal = 'web' AND estado <> 'cancelado' GROUP BY metodo_pago ORDER BY 2 DESC LIMIT 1
+
+- pregunta: Las 5 marcas con más unidades vendidas en 2025
+  sql: |
+    SELECT p.marca, SUM(v.cantidad)
+    FROM marts.fct_ventas v JOIN marts.dim_producto p ON p.id_producto = v.id_producto
+    WHERE v.dia BETWEEN '2025-01-01' AND '2025-12-31'
+    GROUP BY p.marca ORDER BY 2 DESC LIMIT 5
+
+- pregunta: ¿Cuál es la tasa de devolución de cada canal?
+  sql: |
+    SELECT canal, ROUND(SUM(importe_devuelto) / SUM(importe_neto), 4)
+    FROM marts.fct_ventas GROUP BY canal ORDER BY canal
+
+- pregunta: ¿Cuántos clientes hay de cada nivel de fidelidad?
+  sql: |
+    SELECT nivel_fidelidad, COUNT(*) FROM marts.dim_cliente GROUP BY nivel_fidelidad ORDER BY 2 DESC
+
+- pregunta: ¿Qué centro tuvo más horas extra en diciembre de 2025?
+  sql: |
+    SELECT centro, horas_extra FROM marts.rpt_rrhh_centro_mes
+    WHERE mes = '2025-12-01' ORDER BY horas_extra DESC LIMIT 1
+
+- pregunta: ¿Cuántas alertas de rotura de stock hay en los almacenes?
+  sql: |
+    SELECT COUNT(*) FROM marts.fct_stock s JOIN marts.dim_ubicacion u ON u.id_ubicacion = s.id_ubicacion
+    WHERE u.tipo = 'almacen' AND s.nivel_alerta = 'ROTURA'
+
+- pregunta: ¿Cuántos clientes tiene cada segmento de K-Means?
+  sql: |
+    SELECT segmento, clientes FROM ml.segmento_resumen ORDER BY clientes DESC
+
+- pregunta: ¿Qué transportista tiene la media de días hasta la entrega más alta?
+  sql: |
+    SELECT transportista, ROUND(AVG(dias_hasta_entrega), 2) FROM marts.fct_pedidos
+    WHERE dias_hasta_entrega IS NOT NULL GROUP BY transportista ORDER BY 2 DESC LIMIT 1
+
+- pregunta: ¿Cuántas ventas prevé el modelo para la web en enero de 2026?
+  sql: |
+    SELECT ROUND(SUM(prevision), 2) FROM ml.prevision_ventas
+    WHERE canal = 'web' AND fecha BETWEEN '2026-01-01' AND '2026-01-31'
+
+- pregunta: ¿Qué vendedor tuvo más ventas por hora trabajada en 2025?
+  sql: |
+    SELECT empleado, ROUND(SUM(ventas) / SUM(horas), 2) FROM marts.rpt_productividad_vendedor
+    WHERE mes BETWEEN '2025-01-01' AND '2025-12-01'
+    GROUP BY empleado ORDER BY 2 DESC LIMIT 1

@@ -4,7 +4,7 @@
 
 Plataforma de datos *end-to-end* para **TechNova**, una cadena ficticia de tecnología **omnicanal** (tienda online + 9 tiendas físicas + 3 almacenes en España).
 
-El proyecto simula todo el ciclo de vida del dato en una empresa real: una base de datos operacional con 3 años de actividad, un flujo **ETL** que integra varias fuentes, un **data warehouse** en estrella, un **dashboard** de negocio y modelos de **Machine Learning**.
+El proyecto simula todo el ciclo de vida del dato en una empresa real: una base de datos operacional con 3 años de actividad, un flujo **ETL** que integra varias fuentes, un **data warehouse** en estrella, **dashboards** de negocio, informes Excel automáticos, modelos de **Machine Learning** y un **asistente de IA** que responde preguntas sobre los datos en lenguaje natural.
 
 > TechNova, sus clientes, empleados y proveedores son ficticios. Todos los datos se generan con Python.
 
@@ -43,6 +43,7 @@ flowchart LR
 | Visualización | Metabase 0.64 (LTS) |
 | Machine Learning | scikit-learn · pandas · matplotlib |
 | Calidad y CI | GitHub Actions · pytest · ruff |
+| IA generativa | Google Gemini (o Claude / Ollama) · Streamlit |
 
 ---
 
@@ -589,13 +590,71 @@ Un cuarto dashboard en Metabase muestra los segmentos (tamaño, gasto, ticket, p
 
 ---
 
+## Asistente de datos con IA (text-to-SQL)
+
+Una interfaz de chat donde cualquier persona de negocio pregunta en español y obtiene la respuesta sin saber SQL: **"¿Qué tienda vendió más en noviembre?"**. Un modelo de lenguaje (por defecto **Google Gemini**) convierte la pregunta en SQL, la consulta se ejecuta de forma segura sobre el data warehouse y el modelo resume el resultado en dos o tres frases, acompañado de un gráfico.
+
+![Asistente de datos](docs/img/asistente_chat.png)
+
+```mermaid
+flowchart LR
+    P[Pregunta en español] --> L1[LLM: genera SQL<br/>con el contexto del DW]
+    L1 --> V{Validación<br/>del SQL}
+    V -- no válido --> L1
+    V --> E[(Ejecución con usuario<br/>de solo lectura)]
+    E -- error --> L1
+    E --> L2[LLM: resume<br/>los resultados]
+    L2 --> R[Respuesta + gráfico<br/>+ SQL + tabla]
+    R --> H[(asistente.consulta)]
+```
+
+| Pieza | Qué hace |
+|---|---|
+| **Capa semántica** (`asistente/catalogo.yml`) | Explica al modelo qué es cada tabla, cómo se calcula cada métrica (facturación, ticket medio, tasa de devolución, absentismo...) y qué errores evitar. Las columnas reales se leen solas de la base de datos, junto con los valores de las columnas categóricas (`canal` vale `'web'` o `'tienda'`, no `'online'`) |
+| **Ejemplos** (*few-shot*) | Cuatro preguntas resueltas dentro del prompt, incluida una que no se puede responder, para que el modelo aprenda el formato y a decir "no lo sé" en vez de inventar |
+| **Autocorrección** | Si el SQL falla, el error de PostgreSQL vuelve al modelo para que lo corrija (un reintento) |
+| **Conversación** | Recuerda las últimas preguntas: se puede seguir con "¿y en 2024?" |
+| **Multi-proveedor** (`asistente/llm.py`) | Gemini, Claude u Ollama (local) cambiando una línea del `.env`, con reintentos automáticos si la capa gratuita limita las peticiones |
+| **Registro** | Cada pregunta queda en `asistente.consulta` (SQL, intentos, si funcionó, tiempo) para medir y mejorar |
+
+### Seguridad: el SQL de una IA nunca se ejecuta tal cual
+
+| Capa | Protección |
+|---|---|
+| Validación (`asistente/seguridad.py`) | Una sola sentencia `SELECT`/`WITH`, sin palabras peligrosas (`DELETE`, `DROP`, `INTO`, `pg_sleep`...) y solo sobre los esquemas `marts` y `ml` |
+| Límite | Toda consulta se envuelve en `SELECT * FROM (...) LIMIT 500` |
+| Usuario de solo lectura | `technova_lector` solo tiene permiso de lectura en `marts` y `ml`, columna a columna: **no ve el nombre, el email ni la fecha de nacimiento de los clientes** |
+| Base de datos | Transacciones de solo lectura por defecto y 15 segundos como máximo por consulta |
+
+Aunque la validación fallase, la base de datos rechaza un `DELETE` ("cannot execute DELETE in a read-only transaction"), una consulta a `staging` o a los emails ("permission denied") y una consulta infinita (timeout). Los tests de `tests/test_asistente.py` comprueban todo esto.
+
+### Evaluación
+
+`asistente/evaluar.py` mide la calidad con 15 preguntas de referencia (`asistente/evaluacion.yml`) que cubren ventas, productos, pedidos, clientes, RRHH, stock y Machine Learning. Compara el **resultado** de la consulta del asistente con el de una consulta escrita a mano (*execution accuracy*), no el texto del SQL, porque hay muchas formas correctas de escribir la misma consulta. El resultado se guarda en [docs/asistente_evaluacion.md](docs/asistente_evaluacion.md).
+
+```bash
+# Interfaz web (http://localhost:8501)
+streamlit run asistente/app.py
+
+# Desde la terminal
+python asistente/preguntar.py "¿Qué categoría tuvo más margen en 2025?"
+python asistente/preguntar.py            # modo conversación
+
+# Evaluación
+python asistente/evaluar.py
+```
+
+![SQL generado y datos](docs/img/asistente_sql.png)
+
+---
+
 ## Integración continua (CI)
 
 Cada `git push` lanza en **GitHub Actions** (`.github/workflows/ci.yml`) dos trabajos. Si alguno falla, el commit queda marcado en rojo y la insignia del principio de este README lo muestra.
 
 | Trabajo | Qué hace | Tiempo |
 |---|---|---|
-| **Calidad de código y tests** | `ruff` revisa el estilo y los errores (variables sin usar, imports que faltan...) y `pytest` ejecuta 67 tests unitarios | ~1 min |
+| **Calidad de código y tests** | `ruff` revisa el estilo y los errores (variables sin usar, imports que faltan...) y `pytest` ejecuta 94 tests unitarios | ~1 min |
 | **Pipeline de punta a punta** | Levanta un PostgreSQL 17 real, genera una TechNova de 3.000 clientes y ejecuta el proyecto **entero**: generador, ETL con la API de divisas real, `dbt build` con sus 69 tests, informes Excel y los dos modelos de ML. Después `scripts/comprobar_pipeline.py` verifica 14 resultados, entre ellos que las ventas del data warehouse cuadren al céntimo con las de la OLTP | ~4 min |
 
 Los tests unitarios (`tests/`) cubren las partes con más lógica:
@@ -607,6 +666,7 @@ Los tests unitarios (`tests/`) cubren las partes con más lógica:
 | `test_divisas.py` | Los fines de semana se rellenan con el viernes y se marcan como interpolados |
 | `test_ml.py` | Nombres de los segmentos, Black Friday, métricas, pesos por recencia y un backtest completo con datos sintéticos |
 | `test_informes.py` | Utilidades de fechas y nombres de los informes Excel |
+| `test_asistente.py` | Que el SQL peligroso se bloquee, la lectura del JSON del modelo y el flujo completo con autocorrección y conversación (con un LLM y una base de datos falsos) |
 
 Los informes Excel, los gráficos de ML y los logs generados en el CI se guardan como **artefactos** descargables de cada ejecución durante 7 días.
 
@@ -686,7 +746,7 @@ technova-data-platform/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml              # CI: calidad de código, tests y pipeline de punta a punta
-├── tests/                      # 67 tests unitarios con pytest
+├── tests/                      # 94 tests unitarios con pytest
 ├── scripts/
 │   ├── reiniciar_todo.py       # borra todo y lo regenera desde cero con un comando
 │   └── comprobar_pipeline.py   # verifica que todo el pipeline ha dejado sus resultados
@@ -737,6 +797,17 @@ technova-data-platform/
 │   ├── comun.py                # conexión, registro de entrenamientos y gráficos
 │   ├── segmentacion_clientes.py # K-Means
 │   └── prevision_ventas.py     # backtest de 4 modelos y previsión a 3 meses
+├── asistente/
+│   ├── app.py                  # chat web con Streamlit
+│   ├── preguntar.py            # el asistente desde la terminal
+│   ├── asistente.py            # pregunta -> SQL -> validación -> ejecución -> resumen
+│   ├── llm.py                  # Gemini, Claude u Ollama
+│   ├── esquema.py              # contexto para el modelo: tablas, columnas y valores
+│   ├── catalogo.yml            # capa semántica: tablas, métricas y reglas
+│   ├── seguridad.py            # validación del SQL generado
+│   ├── bd.py                   # usuario de solo lectura y registro de preguntas
+│   ├── evaluar.py              # mide el % de preguntas correctas
+│   └── evaluacion.yml          # 15 preguntas con su SQL de referencia
 ├── dashboard/
 │   ├── dashboards.py           # definición de los 4 dashboards y sus 47 gráficos
 │   └── crear_dashboard.py      # los crea en Metabase con su API
@@ -779,4 +850,4 @@ technova-data-platform/
 - [x] **Fase 8** — Machine Learning: segmentación de clientes y previsión de ventas
 - [x] **Fase final** — 40.000 clientes simulados, script de reinicio completo y capturas
 - [x] **Extra 1** — Integración continua con GitHub Actions: tests unitarios y pipeline de punta a punta
-- [ ] **Extra 2** — Preguntas a los datos en lenguaje natural con IA
+- [x] **Extra 2** — Asistente de datos con IA: preguntas en lenguaje natural convertidas en SQL seguro

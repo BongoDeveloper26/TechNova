@@ -8,5 +8,5 @@ import sys
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
-for carpeta in ("etl", "ml"):
+for carpeta in ("etl", "ml", "asistente"):
     sys.path.insert(0, str(RAIZ / carpeta))

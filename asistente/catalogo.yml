@@ -1,0 +1,90 @@
+# =====================================================================
+# Capa semántica del asistente
+# =====================================================================
+# El LLM no conoce TechNova: solo ve lo que le contamos aquí, junto con las
+# columnas reales (que se leen solas de la base de datos) y los valores de las
+# columnas de texto con pocos valores distintos (canal, categoría, tienda...).
+#
+# Este fichero es lo que más influye en que el SQL generado sea correcto:
+# qué significa cada tabla, cómo se calcula cada métrica de negocio y qué
+# trampas hay que evitar. Es la misma idea que la "capa semántica" de las
+# herramientas de BI: una única definición de cada métrica para todos.
+
+contexto: |
+  TechNova es una cadena española de tecnología con tienda online (canal 'web') y 9 tiendas
+  físicas (canal 'tienda'), además de 3 almacenes. Los datos van del 1 de enero de 2023 al
+  31 de diciembre de 2025. "Este año" o "el último año" es 2025, "el último mes" es diciembre
+  de 2025 y "el mes pasado" es noviembre de 2025, salvo que la pregunta diga otra cosa.
+  Los importes están en euros.
+
+# Tablas que puede consultar el asistente (el resto no existen para él)
+tablas:
+  marts.fct_ventas: >
+    Una fila por línea de pedido NO cancelado (la tabla principal de ventas). Para la fecha usa la
+    columna dia. Las ventas de la web tienen id_ubicacion = el almacén que envía el pedido; las de
+    tienda, la tienda y el vendedor (id_empleado).
+  marts.fct_pedidos: >
+    Una fila por pedido, INCLUIDOS los cancelados (columna estado). Tiene el método de pago, el
+    transportista, el estado del envío y los días hasta la entrega.
+  marts.dim_fecha: Calendario con festivos, campañas comerciales y Black Friday.
+  marts.dim_producto: Productos con categoría, subcategoría, marca, precio, coste y margen.
+  marts.dim_cliente: >
+    Situación actual de cada cliente: edad, ciudad, nivel de fidelidad, segmento RFM, gasto total
+    y número de pedidos. (Sin datos personales: no hay nombres ni emails disponibles.)
+  marts.dim_ubicacion: Tiendas y almacenes (columna tipo = 'tienda' o 'almacen').
+  marts.dim_empleado: Empleados con su puesto, su ubicación (texto con el nombre del centro) y su jefe.
+  marts.dim_proveedor: Proveedores, su país y su moneda.
+  marts.fct_stock: >
+    Foto del stock actual: una fila por producto y ubicación (tiendas Y almacenes; une con dim_ubicacion
+    y filtra por tipo si la pregunta habla solo de unas u otros), con su nivel de alerta. Cada fila con
+    nivel_alerta distinto de 'OK' es una alerta (contar filas, no productos distintos).
+  marts.fct_tarifas_proveedor: Precios de coste que envía cada proveedor cada día, convertidos a euros.
+  marts.fct_jornadas: Una fila por empleado y día trabajado (fichajes), con horas y horas extra.
+  marts.fct_ausencias: Una fila por empleado y día ausente, con el tipo de ausencia.
+  marts.fct_nominas: Una fila por empleado y mes (columna mes = primer día del mes) con su coste.
+  marts.rpt_productividad_vendedor: Ventas, horas y ventas por hora de cada vendedor de tienda por mes.
+  marts.rpt_rrhh_centro_mes: >
+    Indicadores de RRHH por centro y mes: plantilla, horas, horas extra, absentismo, coste de
+    personal y ventas del centro (solo 2025).
+  ml.segmento_cliente: Segmento de cada cliente calculado con K-Means (Machine Learning).
+  ml.segmento_resumen: Resumen de cada segmento de K-Means, con su descripción y acción recomendada.
+  ml.prevision_ventas: Previsión diaria de ventas de los próximos 3 meses (enero a marzo de 2026) por canal.
+  ml.metricas_prevision: Error de cada modelo de previsión en el backtest.
+
+# Cómo se unen las tablas
+relaciones:
+  - fct_ventas.id_producto = dim_producto.id_producto
+  - fct_ventas.id_cliente = dim_cliente.id_cliente
+  - fct_ventas.id_ubicacion = dim_ubicacion.id_ubicacion
+  - fct_ventas.id_empleado = dim_empleado.id_empleado
+  - fct_ventas.id_fecha = dim_fecha.id_fecha  (o fct_ventas.dia = dim_fecha.fecha)
+  - fct_pedidos.id_cliente / id_ubicacion / id_fecha igual que fct_ventas
+  - fct_stock.id_producto = dim_producto.id_producto y fct_stock.id_ubicacion = dim_ubicacion.id_ubicacion
+  - fct_jornadas, fct_ausencias y fct_nominas se unen con dim_empleado por id_empleado y con dim_ubicacion por id_ubicacion
+  - ml.segmento_cliente.id_cliente = dim_cliente.id_cliente
+
+# Definición única de cada métrica de negocio
+metricas:
+  facturación o ventas: SUM(fct_ventas.importe_neto)
+  ventas netas de devoluciones: SUM(fct_ventas.importe_neto_final)
+  margen bruto: SUM(fct_ventas.margen)
+  margen %: SUM(margen) / NULLIF(SUM(importe_neto), 0)
+  pedidos: COUNT(DISTINCT fct_ventas.id_pedido)
+  ticket medio: SUM(importe_neto) / COUNT(DISTINCT id_pedido)
+  unidades vendidas: SUM(fct_ventas.cantidad)
+  tasa de devolución: SUM(importe_devuelto) / NULLIF(SUM(importe_neto), 0)
+  clientes activos: COUNT(DISTINCT fct_ventas.id_cliente)
+  ventas por hora trabajada: SUM(rpt_productividad_vendedor.ventas) / SUM(horas) del periodo (NUNCA la media de la columna ventas_por_hora, que es mensual)
+  absentismo: rpt_rrhh_centro_mes.absentismo (ya es un porcentaje en tanto por uno)
+  coste de personal: SUM(fct_nominas.coste_total) o rpt_rrhh_centro_mes.coste_personal
+  tasa de cancelación: pedidos con estado = 'cancelado' / total de pedidos, en fct_pedidos
+
+# Errores típicos que el modelo debe evitar
+reglas:
+  - Para ventas usa fct_ventas (ya excluye cancelados); fct_pedidos solo para cancelaciones, pagos y envíos.
+  - Para filtrar por tienda une con dim_ubicacion y usa su nombre exacto (columna ubicacion), por ejemplo 'TechNova Madrid Gran Vía'.
+  - Los porcentajes se devuelven en tanto por uno (0.25 = 25 %) con 4 decimales; los importes, redondeados a 2 decimales.
+  - Agrupa los meses con to_char(dia, 'YYYY-MM') AS mes y ordénalos cronológicamente.
+  - fecha_pedido es un TIMESTAMP (con hora): filtra con fecha_pedido >= '2025-01-01' AND fecha_pedido < '2026-01-01', nunca con BETWEEN '...-01-01' AND '...-12-31', que se deja fuera el último día.
+  - En los rankings ordena de mayor a menor y limita a 10 filas salvo que la pregunta pida otra cosa.
+  - Pon alias en español y sin espacios a todas las columnas calculadas (facturacion, ticket_medio, margen_pct...).
