@@ -1,0 +1,18 @@
+# Configuración de las herramientas de calidad de código (no es un paquete instalable)
+
+[tool.ruff]
+line-length = 160
+target-version = "py312"
+extend-exclude = ["dbt"]
+
+[tool.ruff.lint]
+# E/W: estilo (pycodestyle) | F: errores reales (pyflakes): variables sin usar, imports que faltan...
+select = ["E", "F", "W"]
+# E741: nombres de variable como "l" (en este proyecto se usa para "línea" en bucles cortos)
+# W291, W292, W293: espacios al final de línea o falta de salto de línea final (cosméticos,
+# dependen del editor; en Windows aparecen con facilidad y no cambian el comportamiento)
+ignore = ["E741", "W291", "W292", "W293"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,5 +1,7 @@
 # TechNova Data Platform
 
+[![CI](https://github.com/BongoDeveloper26/TechNova/actions/workflows/ci.yml/badge.svg)](https://github.com/BongoDeveloper26/TechNova/actions/workflows/ci.yml)
+
 Plataforma de datos *end-to-end* para **TechNova**, una cadena ficticia de tecnología **omnicanal** (tienda online + 9 tiendas físicas + 3 almacenes en España).
 
 El proyecto simula todo el ciclo de vida del dato en una empresa real: una base de datos operacional con 3 años de actividad, un flujo **ETL** que integra varias fuentes, un **data warehouse** en estrella, un **dashboard** de negocio y modelos de **Machine Learning**.
@@ -40,6 +42,7 @@ flowchart LR
 | Transformación | dbt 1.11 (dbt-postgres) |
 | Visualización | Metabase 0.64 (LTS) |
 | Machine Learning | scikit-learn · pandas · matplotlib |
+| Calidad y CI | GitHub Actions · pytest · ruff |
 
 ---
 
@@ -586,6 +589,37 @@ Un cuarto dashboard en Metabase muestra los segmentos (tamaño, gasto, ticket, p
 
 ---
 
+## Integración continua (CI)
+
+Cada `git push` lanza en **GitHub Actions** (`.github/workflows/ci.yml`) dos trabajos. Si alguno falla, el commit queda marcado en rojo y la insignia del principio de este README lo muestra.
+
+| Trabajo | Qué hace | Tiempo |
+|---|---|---|
+| **Calidad de código y tests** | `ruff` revisa el estilo y los errores (variables sin usar, imports que faltan...) y `pytest` ejecuta 67 tests unitarios | ~1 min |
+| **Pipeline de punta a punta** | Levanta un PostgreSQL 17 real, genera una TechNova de 3.000 clientes y ejecuta el proyecto **entero**: generador, ETL con la API de divisas real, `dbt build` con sus 69 tests, informes Excel y los dos modelos de ML. Después `scripts/comprobar_pipeline.py` verifica 14 resultados, entre ellos que las ventas del data warehouse cuadren al céntimo con las de la OLTP | ~4 min |
+
+Los tests unitarios (`tests/`) cubren las partes con más lógica:
+
+| Fichero | Qué comprueba |
+|---|---|
+| `test_excel_rrhh.py` | Fechas, horas e importes escritos de muchas formas (`9h58`, `09.58`, `1.850,00 €`, nº de serie de Excel...) y los rechazos con su motivo |
+| `test_proveedores.py` | Cada error de un CSV de proveedor se rechaza con su motivo, los duplicados se quedan con la última aparición y la conversión a euros usa el tipo de cambio del día |
+| `test_divisas.py` | Los fines de semana se rellenan con el viernes y se marcan como interpolados |
+| `test_ml.py` | Nombres de los segmentos, Black Friday, métricas, pesos por recencia y un backtest completo con datos sintéticos |
+| `test_informes.py` | Utilidades de fechas y nombres de los informes Excel |
+
+Los informes Excel, los gráficos de ML y los logs generados en el CI se guardan como **artefactos** descargables de cada ejecución durante 7 días.
+
+```bash
+# Lo mismo en local
+pip install -r requirements-dev.txt
+ruff check .
+pytest
+python scripts/comprobar_pipeline.py     # después de reiniciar_todo.py
+```
+
+---
+
 ## Puesta en marcha
 
 **Requisitos:** Docker Desktop (con al menos 6 GB de memoria asignada para tener todo encendido a la vez) y Python 3.10+
@@ -646,9 +680,16 @@ El contenedor de Airflow ejecuta el ETL automáticamente cada noche. La primera 
 technova-data-platform/
 ├── docker-compose.yml          # PostgreSQL, pgAdmin, Airflow y Metabase
 ├── requirements.txt            # librerías de Python para ejecutar en local
+├── requirements-dev.txt        # herramientas de desarrollo: ruff y pytest
+├── pyproject.toml              # configuración de ruff y pytest
 ├── .env.example                # plantilla de las variables de entorno
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # CI: calidad de código, tests y pipeline de punta a punta
+├── tests/                      # 67 tests unitarios con pytest
 ├── scripts/
-│   └── reiniciar_todo.py       # borra todo y lo regenera desde cero con un comando
+│   ├── reiniciar_todo.py       # borra todo y lo regenera desde cero con un comando
+│   └── comprobar_pipeline.py   # verifica que todo el pipeline ha dejado sus resultados
 ├── airflow/
 │   ├── Dockerfile              # imagen oficial + librerías del ETL
 │   ├── requirements-airflow.txt
@@ -737,3 +778,5 @@ technova-data-platform/
 - [x] **Fase 7b** — Informes automáticos en Excel y dashboard de RRHH
 - [x] **Fase 8** — Machine Learning: segmentación de clientes y previsión de ventas
 - [x] **Fase final** — 40.000 clientes simulados, script de reinicio completo y capturas
+- [x] **Extra 1** — Integración continua con GitHub Actions: tests unitarios y pipeline de punta a punta
+- [ ] **Extra 2** — Preguntas a los datos en lenguaje natural con IA

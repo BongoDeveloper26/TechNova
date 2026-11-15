@@ -10,7 +10,7 @@ from datetime import date, timedelta
 
 from faker import Faker
 
-from config import FECHA_FIN, FECHA_INICIO, NUM_CLIENTES, SEMILLA
+from config import FECHA_FIN, NUM_CLIENTES, SEMILLA
 from db import get_connection
 
 fake = Faker("es_ES")  # nombres, calles, etc. en español
